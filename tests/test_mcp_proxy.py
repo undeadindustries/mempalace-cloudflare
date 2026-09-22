@@ -34,6 +34,8 @@ class TestInvocationRouting:
             # it never fails without a value.
             ["--palace", "/tmp/p", "--collection"],
             ["--collection", "--palace", "/tmp/p"],
+            ["--ensure-hub"],
+            ["--palace", "/tmp/p", "--ensure-hub"],
         ],
     )
     def test_plain_stdio_invocations_can_be_proxied(self, argv):
