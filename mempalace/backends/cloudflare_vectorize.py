@@ -32,7 +32,7 @@ from ..cloudflare.workers_ai import WorkersAIEmbedder
 def _run_async(coro):
     """Run an async coroutine synchronously if no loop is running, or create a task."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
 
@@ -217,9 +217,9 @@ class CloudflareVectorizeCollection(BaseCollection):
             # Query D1 registry matching where filter
             wing = where.get("wing")
             room = where.get("room")
-            l = limit or 50
-            o = offset or 0
-            d1_rows = await self.d1.list_drawers(wing=wing, room=room, limit=l, offset=o)
+            lim = limit or 50
+            offset_val = offset or 0
+            d1_rows = await self.d1.list_drawers(wing=wing, room=room, limit=lim, offset=offset_val)
             target_ids = [r["id"] for r in d1_rows]
 
         if not target_ids:

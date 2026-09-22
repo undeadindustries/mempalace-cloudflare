@@ -11,7 +11,6 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any, Dict
-import pytest
 
 from mempalace.cloudflare.entrypoint import CloudflareMemPalaceApp
 from tests.test_cloudflare_adapters import (

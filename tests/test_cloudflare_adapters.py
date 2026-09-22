@@ -7,9 +7,7 @@ import asyncio
 import math
 import sqlite3
 from typing import Any, Dict, List, Optional
-import pytest
 
-import mempalace.cloudflare._shims
 from mempalace.backends.base import PalaceRef
 from mempalace.backends.cloudflare_vectorize import CloudflareVectorizeBackend, CloudflareVectorizeCollection
 from mempalace.cloudflare.d1_kg import D1KnowledgeGraph

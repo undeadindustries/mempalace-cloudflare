@@ -6,7 +6,6 @@ Tests across Unicode, multiline code, special punctuation, and complex text.
 """
 
 import asyncio
-import pytest
 
 from mempalace.backends.cloudflare_vectorize import CloudflareVectorizeCollection
 from mempalace.cloudflare.d1_registry import D1DrawerRegistry

@@ -10,7 +10,7 @@ Handles:
 
 import json
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
 from ._shims import install_shims

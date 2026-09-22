@@ -4,7 +4,7 @@ Uses `@cf/baai/bge-small-en-v1.5` (384-dimensional) via the Cloudflare Workers A
 Supports async execution and batching for embedding documents and queries.
 """
 
-from typing import Any, List, Optional
+from typing import Any, List
 
 
 DEFAULT_EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5"

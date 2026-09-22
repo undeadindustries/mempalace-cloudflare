@@ -6,7 +6,7 @@ tools over the Model Context Protocol (MCP) Streamable HTTP transport.
 
 from datetime import datetime
 import hashlib
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ._shims import install_shims
 from ..ids import make_drawer_id_from_content
