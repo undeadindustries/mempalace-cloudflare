@@ -17,7 +17,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   servers stop racing for the ChromaDB writer lease. Other hosts are
   unchanged. Manual stop: kill the pid in
   `~/.mempalace/server/*/serverinfo.json`. The idle watchdog still
-  retires an unused hub.
+  retires an unused hub. (#2539)
+- **Cursor agent transcripts parse as conversations.** `normalize.py`
+  now reads Cursor IDE JSONL (`role` + `message.content`, plus
+  `turn_ended` records): unwraps `<user_query>`, drops injected Cursor
+  blocks, merges tool-loop assistant turns, and formats Cursor tool
+  names. `mempalace mine ~/.cursor/projects/... --mode convos` lands in
+  `wing_api` unless `--wing` is set. The Cursor save hook is silent by
+  default; the background mine is the verbatim path. (#2540)
+
+### Upgrade notes
+
+- **Cursor save hook no longer emits a followup by default.** Set
+  `MEMPAL_VERBOSE=true` to keep the diary-nudge `followup_message`.
+  `MEMPAL_CURSOR_SILENT` is a no-op alias. The preCompact
+  `user_message` is also verbose-only. (#2540)
 
 ### Bug Fixes
 
