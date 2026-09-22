@@ -17,6 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`mempalace-mcp` with no hub running) now answers it with `-32700`, as the hub's
   HTTP transport does, and `mempalace-light-mcp` skips it, as it skips invalid
   JSON. (#2556)
+- **The MCP peer-writer refusal now names the lease holder.** The `-32001`
+  message includes the holder's PID and argv (`Peer MCP writer active (held by
+  PID 6704 (/path/mempalace-mcp)); ...`), `error.data` carries `holder` plus a
+  hint to stop that process or run a hub, and `mempalace_status` reports
+  `writer: {role, holder}` so an agent can diagnose without failing a write.
+  Setup failures still do not claim contention. (#2538)
 - **A `known_entities.json` write no longer appears to hang on Windows when the
   directory refuses a temporary file.** `_publish_registry` falls back to writing
   in place when the directory takes no new name, and it learned that from the
