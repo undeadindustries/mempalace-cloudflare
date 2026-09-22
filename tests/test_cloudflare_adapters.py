@@ -102,6 +102,7 @@ class FakeD1Database:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
         self._init_schemas()
+        self.batch_calls: List[List[FakeD1Statement]] = []
 
     def _init_schemas(self):
         with open("migrations/0001_kg.sql") as f:
@@ -112,6 +113,16 @@ class FakeD1Database:
 
     def prepare(self, sql: str) -> FakeD1Statement:
         return FakeD1Statement(self.conn, sql)
+
+    async def batch(self, statements: List[FakeD1Statement]) -> List[dict]:
+        self.batch_calls.append(statements)
+        results = []
+        for stmt in statements:
+            cur = self.conn.cursor()
+            cur.execute(stmt.sql, stmt.params)
+            self.conn.commit()
+            results.append({"success": True})
+        return results
 
 
 class FakeVectorizeIndex:
@@ -216,6 +227,8 @@ def test_d1_knowledge_graph():
 
         # 3. Supersede fact
         await kg.supersede("Max", "works_at", "CompanyA", "Max", "works_at", "CompanyB", boundary="2026-01-01")
+        # Verify db.batch was called with batched statements
+        assert len(db.batch_calls) >= 1
         cur_facts = await kg.query_entity("Max", as_of="2026-06-01")
         preds = [f["object_name"] for f in cur_facts if f["predicate"] == "works_at"]
         assert "CompanyB" in preds
@@ -254,6 +267,12 @@ def test_d1_registry_and_taxonomy():
         assert await reg.check_duplicate("hash1") == "d1"
         assert await reg.check_duplicate("nonexistent") is None
 
+        # Wing/room scoped duplicate check
+        await reg.upsert_drawer("d5", "personal", "notes", "drawers/d5.txt", "hash1")
+        assert await reg.check_duplicate("hash1", wing="tech") == "d1"
+        assert await reg.check_duplicate("hash1", wing="personal") == "d5"
+        assert await reg.check_duplicate("hash1", wing="nonexistent_wing") is None
+
     asyncio.run(_test())
 
 
@@ -267,6 +286,23 @@ def test_cloudflare_vectorize_collection_full_crud():
         embedder = WorkersAIEmbedder(ai)
         r2_storage = R2DrawerStorage(r2)
         d1_reg = D1DrawerRegistry(db)
+
+        # Missing upsert raises RuntimeError
+        bad_col = CloudflareVectorizeCollection(
+            vector_index=object(),
+            ai_embedder=embedder,
+            r2_storage=R2DrawerStorage(FakeR2Bucket()),
+            d1_registry=D1DrawerRegistry(FakeD1Database()),
+        )
+        try:
+            await bad_col.a_upsert(
+                documents=["doc without vectorize"],
+                ids=["bad-id"],
+                metadatas=[{"wing": "test", "room": "err"}],
+            )
+            assert False, "Should have raised RuntimeError for missing upsert"
+        except RuntimeError as e:
+            assert "Vectorize binding missing 'upsert'" in str(e)
 
         col = CloudflareVectorizeCollection(
             vector_index=vec,

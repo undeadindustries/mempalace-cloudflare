@@ -110,19 +110,38 @@ class D1DrawerRegistry:
         sql = f"DELETE FROM drawers WHERE id IN ({placeholders})"
         await self._execute_raw(sql, drawer_ids)
 
-    async def delete_by_source(self, source_file: str) -> List[str]:
-        """Delete all drawers originating from a given source_file and return their IDs."""
+    async def find_ids_by_source(self, source_file: str) -> List[str]:
+        """Find all drawer IDs originating from a given source_file without deleting them."""
         find_sql = "SELECT id FROM drawers WHERE source_file = ?"
         rows = await self._query_raw(find_sql, [source_file])
-        ids = [r["id"] for r in rows]
+        return [r["id"] for r in rows]
+
+    async def delete_by_source(self, source_file: str) -> List[str]:
+        """Delete all drawers originating from a given source_file and return their IDs."""
+        ids = await self.find_ids_by_source(source_file)
         if ids:
             await self.delete_drawers(ids)
         return ids
 
-    async def check_duplicate(self, content_hash: str) -> Optional[str]:
+    async def check_duplicate(
+        self,
+        content_hash: str,
+        wing: Optional[str] = None,
+        room: Optional[str] = None,
+    ) -> Optional[str]:
         """Check if identical content hash exists; returns existing drawer_id or None."""
-        sql = "SELECT id FROM drawers WHERE content_hash = ? LIMIT 1"
-        row = await self._first_raw(sql, [content_hash])
+        params: List[Any] = [content_hash]
+        where_clauses: List[str] = ["content_hash = ?"]
+        if wing:
+            where_clauses.append("wing = ?")
+            params.append(wing)
+        if room:
+            where_clauses.append("room = ?")
+            params.append(room)
+
+        where = " AND ".join(where_clauses)
+        sql = f"SELECT id FROM drawers WHERE {where} LIMIT 1"
+        row = await self._first_raw(sql, params)
         return row["id"] if row else None
 
     async def count(self, wing: Optional[str] = None, room: Optional[str] = None) -> int:

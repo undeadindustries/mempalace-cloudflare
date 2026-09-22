@@ -139,6 +139,7 @@ class CloudflarePalaceTools:
                         "room": {"type": "string", "description": "Room (subtopic/context)"},
                         "content": {"type": "string", "description": "Verbatim text to store"},
                         "source_file": {"type": "string", "description": "Optional source reference"},
+                        "drawer_id": {"type": "string", "description": "Optional explicit drawer ID"},
                     },
                     "required": ["wing", "room", "content"],
                 },
@@ -154,6 +155,7 @@ class CloudflarePalaceTools:
                             "items": {
                                 "type": "object",
                                 "properties": {
+                                    "id": {"type": "string"},
                                     "wing": {"type": "string"},
                                     "room": {"type": "string"},
                                     "content": {"type": "string"},
@@ -197,6 +199,7 @@ class CloudflarePalaceTools:
                         "room": {"type": "string", "description": "Filter by room (optional)"},
                         "limit": {"type": "integer", "description": "Max to return (default: 50)"},
                         "offset": {"type": "integer", "description": "Pagination offset (default: 0)"},
+                        "include_content": {"type": "boolean", "description": "Hydrate verbatim content from R2 (default: false)"},
                     },
                 },
                 "handler": self.tool_list_drawers,
@@ -410,14 +413,25 @@ class CloudflarePalaceTools:
         room: Optional[str] = None,
     ) -> Dict[str, Any]:
         chash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        existing = await self.reg.check_duplicate(chash)
+        existing = await self.reg.check_duplicate(chash, wing=wing, room=room)
         if existing:
             return {"is_duplicate": True, "exact_match": True, "existing_drawer_id": existing}
 
         # Check semantic similarity using search
         from .search import execute_hybrid_search
 
-        hits = await execute_hybrid_search(self.col, query=content[:500], n_results=1)
+        where: Dict[str, Any] = {}
+        if wing:
+            where["wing"] = wing
+        if room:
+            where["room"] = room
+
+        hits = await execute_hybrid_search(
+            self.col,
+            query=content[:500],
+            n_results=1,
+            where=where if where else None,
+        )
         if hits and hits[0].get("score", 0.0) >= 0.95:
             return {"is_duplicate": True, "exact_match": False, "existing_drawer_id": hits[0]["id"]}
 
@@ -429,8 +443,9 @@ class CloudflarePalaceTools:
         room: str,
         content: str,
         source_file: Optional[str] = None,
+        drawer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        did = make_drawer_id_from_content(wing, room, content)
+        did = drawer_id or make_drawer_id_from_content(wing, room, content)
         meta = {
             "wing": wing,
             "room": room,
@@ -453,6 +468,7 @@ class CloudflarePalaceTools:
                 wing=d["wing"],
                 room=d["room"],
                 content=d["content"],
+                drawer_id=d.get("id"),
             )
             stored_ids.append(res["drawer_id"])
         return {"checkpoint": "saved", "count": len(stored_ids), "drawer_ids": stored_ids}
@@ -480,8 +496,15 @@ class CloudflarePalaceTools:
         room: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        include_content: bool = False,
     ) -> List[Dict[str, Any]]:
-        return await self.reg.list_drawers(wing=wing, room=room, limit=limit, offset=offset)
+        drawers = await self.reg.list_drawers(wing=wing, room=room, limit=limit, offset=offset)
+        if include_content and drawers:
+            ids = [d["id"] for d in drawers]
+            docs_map = await self.r2.get_drawers(ids)
+            for d in drawers:
+                d["content"] = docs_map.get(d["id"], "")
+        return drawers
 
     async def tool_update_drawer(
         self,
@@ -517,10 +540,11 @@ class CloudflarePalaceTools:
         return {"deleted_count": len(drawer_ids), "drawer_ids": drawer_ids}
 
     async def tool_delete_by_source(self, source_file: str) -> Dict[str, Any]:
-        deleted = await self.reg.delete_by_source(source_file)
-        if deleted:
-            await self.col.a_delete(ids=deleted)
-        return {"source_file": source_file, "deleted_count": len(deleted), "deleted_ids": deleted}
+        ids = await self.reg.find_ids_by_source(source_file)
+        if ids:
+            await self.col.a_delete(ids=ids)
+            await self.reg.delete_drawers(ids)
+        return {"source_file": source_file, "deleted_count": len(ids), "deleted_ids": ids}
 
     async def tool_diary_write(self, content: str, day: Optional[str] = None) -> Dict[str, Any]:
         d = day or datetime.now().strftime("%Y-%m-%d")

@@ -101,20 +101,31 @@ def test_healthz_unauthenticated():
 
 def test_auth_middleware_rejection():
     async def _test():
+        # 1. Unset MEMPALACE_API_KEY -> 503 on protected routes, 200 on /healthz
+        env_no_key = create_test_env(api_key="")
+        app_no_key = CloudflareMemPalaceApp(env=env_no_key)
+
+        res_health = await send_asgi_request(app_no_key, "GET", "/healthz")
+        assert res_health["status"] == 200
+
+        res_no_key = await send_asgi_request(app_no_key, "GET", "/api/status")
+        assert res_no_key["status"] == 503
+        assert "not configured" in res_no_key["json"]["error"]
+
+        # 2. Configured key: Missing header -> 401
         env = create_test_env(api_key="my-secret-key")
         app = CloudflareMemPalaceApp(env=env)
 
-        # 1. Missing header -> 401
         res = await send_asgi_request(app, "GET", "/api/status")
         assert res["status"] == 401
         assert "Unauthorized" in res["json"]["error"]
 
-        # 2. Invalid token -> 401
+        # 3. Invalid token -> 401
         bad_headers = {b"authorization": b"Bearer wrong-token"}
         res = await send_asgi_request(app, "GET", "/api/status", headers=bad_headers)
         assert res["status"] == 401
 
-        # 3. Valid token -> 200
+        # 4. Valid token -> 200
         good_headers = {b"authorization": b"Bearer my-secret-key"}
         res = await send_asgi_request(app, "GET", "/api/status", headers=good_headers)
         assert res["status"] == 200
@@ -257,5 +268,61 @@ def test_mcp_kg_tools():
         facts = json.loads(q_res["json"]["result"]["content"][0]["text"])
         assert len(facts) >= 1
         assert facts[0]["object_name"] == "Python Workers GA"
+
+    asyncio.run(_test())
+
+
+def test_delete_by_source_failure_preserves_d1():
+    async def _test():
+        from unittest.mock import AsyncMock
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        tools = app._get_tools(env)
+
+        # Add a drawer with source_file
+        await tools.col.a_upsert(
+            documents=["Document from tracked file"],
+            ids=["drawer-src-1"],
+            metadatas=[{"wing": "test", "room": "src", "source_file": "important_doc.md"}],
+        )
+
+        # Confirm it exists in registry
+        ids_before = await tools.reg.find_ids_by_source("important_doc.md")
+        assert ids_before == ["drawer-src-1"]
+
+        # Mock collection a_delete to fail/raise
+        tools.col.a_delete = AsyncMock(side_effect=RuntimeError("R2 connection lost"))
+
+        try:
+            await tools.tool_delete_by_source("important_doc.md")
+            assert False, "Should have raised RuntimeError"
+        except RuntimeError:
+            pass
+
+        # Verify D1 row was preserved because col.a_delete failed before reg.delete_drawers
+        ids_after = await tools.reg.find_ids_by_source("important_doc.md")
+        assert ids_after == ["drawer-src-1"]
+
+    asyncio.run(_test())
+
+
+def test_tool_check_duplicate_respects_wing_scope():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        tools = app._get_tools(env)
+
+        content = "Unique content text to be tested in multiple wings."
+
+        # Add in wing "wing_a"
+        await tools.tool_add_drawer(wing="wing_a", room="room_1", content=content)
+
+        # Check duplicate scoped to wing_a -> duplicate found
+        res_a = await tools.tool_check_duplicate(content=content, wing="wing_a")
+        assert res_a["is_duplicate"] is True
+
+        # Check duplicate scoped to wing_b -> not found
+        res_b = await tools.tool_check_duplicate(content=content, wing="wing_b")
+        assert res_b["is_duplicate"] is False
 
     asyncio.run(_test())

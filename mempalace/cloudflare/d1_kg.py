@@ -119,6 +119,31 @@ class D1KnowledgeGraph:
             return await res
         return res
 
+    async def _batch_execute(self, statements: List[tuple[str, List[Any]]]) -> Any:
+        """Execute multiple SQL statements in a single batch transaction if supported."""
+        if not statements:
+            return []
+
+        prepared_stmts = []
+        for sql, params in statements:
+            stmt = self.db.prepare(sql)
+            if params:
+                stmt = stmt.bind(*params)
+            prepared_stmts.append(stmt)
+
+        batch_fn = getattr(self.db, "batch", None)
+        if batch_fn is not None:
+            res = batch_fn(prepared_stmts)
+            if hasattr(res, "__await__"):
+                return await res
+            return res
+
+        # Fallback: sequential execution
+        results = []
+        for sql, params in statements:
+            results.append(await self._execute_raw(sql, params))
+        return results
+
     def _entity_id(self, name: str) -> str:
         return name.lower().replace(" ", "_").replace("'", "")
 
@@ -257,18 +282,73 @@ class D1KnowledgeGraph:
     ) -> str:
         """Atomically invalidate an old triple and insert its successor."""
         bound = boundary or datetime.now().strftime("%Y-%m-%d")
-        await self.invalidate(old_subject, old_predicate, old_obj, ended=bound)
-        return await self.add_triple(
-            new_subject,
-            new_predicate,
-            new_obj,
-            valid_from=bound,
-            confidence=confidence,
-            source_closet=source_closet,
-            source_file=source_file,
-            source_drawer_id=source_drawer_id,
-            adapter_name=adapter_name,
+        bound = sanitize_iso_temporal(bound, "boundary")
+
+        old_sub_id = self._entity_id(old_subject)
+        old_obj_id = self._entity_id(old_obj)
+        old_pred = old_predicate.lower().replace(" ", "_")
+
+        # Find existing active triple to validate date constraint
+        rows = await self._query_raw(
+            "SELECT id, valid_from FROM triples WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
+            [old_sub_id, old_pred, old_obj_id],
         )
+        batch_statements: List[tuple[str, List[Any]]] = []
+
+        if rows:
+            for row in rows:
+                vf = row["valid_from"]
+                if vf is not None and _temporal_end_key(bound) < _temporal_start_key(vf):
+                    raise ValueError(
+                        f"Ended date {bound!r} cannot be earlier than valid_from {vf!r}"
+                    )
+                batch_statements.append(
+                    ("UPDATE triples SET valid_to=? WHERE id=?", [bound, row["id"]])
+                )
+
+        # Prepare new triple
+        new_sub_id = self._entity_id(new_subject)
+        new_obj_id = self._entity_id(new_obj)
+        new_pred = new_predicate.lower().replace(" ", "_")
+
+        now_str = datetime.now().isoformat()
+        triple_id = make_triple_id(new_sub_id, new_pred, new_obj_id, bound, now_str)
+
+        # Ensure entities exist
+        props = json.dumps({})
+        batch_statements.append((
+            "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
+            [new_sub_id, new_subject, "unknown", props],
+        ))
+        batch_statements.append((
+            "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
+            [new_obj_id, new_obj, "unknown", props],
+        ))
+
+        # Insert new triple
+        batch_statements.append((
+            """INSERT INTO triples (
+                id, subject, predicate, object, valid_from, valid_to,
+                confidence, source_closet, source_file, source_drawer_id, adapter_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                triple_id,
+                new_sub_id,
+                new_pred,
+                new_obj_id,
+                bound,
+                None,
+                confidence,
+                source_closet,
+                source_file,
+                source_drawer_id,
+                adapter_name,
+            ],
+        ))
+
+        # Execute batch atomically
+        await self._batch_execute(batch_statements)
+        return triple_id
 
     async def query_entity(
         self,

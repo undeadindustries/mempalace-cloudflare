@@ -24,3 +24,69 @@ def test_client_collection_construction():
     assert col.base_url == "https://mempalace-cf.example.workers.dev"
     assert col.token == "test-secret-token"
     assert col.namespace == "tenant-1"
+
+
+def test_client_upsert_preserves_caller_ids(monkeypatch):
+    backend = CloudflareRemoteBackend(
+        options={"url": "http://mock-worker", "token": "test-token"}
+    )
+    palace = PalaceRef(id="test-palace")
+    col = backend.get_collection(palace=palace, collection_name="drawers")
+
+    captured_payloads = []
+
+    def mock_request(method, path, data=None, params=None):
+        captured_payloads.append((method, path, data, params))
+        return {"result": {"content": [{"text": "{\"checkpoint\": \"saved\"}"}]}}
+
+    monkeypatch.setattr(col, "_request", mock_request)
+
+    col.upsert(
+        documents=["Doc 1", "Doc 2"],
+        ids=["custom-id-1", "custom-id-2"],
+        metadatas=[{"wing": "w1", "room": "r1"}, {"wing": "w2", "room": "r2"}],
+    )
+
+    assert len(captured_payloads) == 1
+    method, path, data, _ = captured_payloads[0]
+    assert method == "POST"
+    assert path == "/mcp"
+    drawers = data["params"]["arguments"]["drawers"]
+    assert drawers[0]["id"] == "custom-id-1"
+    assert drawers[1]["id"] == "custom-id-2"
+
+
+def test_client_get_where_hydrates_content(monkeypatch):
+    backend = CloudflareRemoteBackend(
+        options={"url": "http://mock-worker", "token": "test-token"}
+    )
+    palace = PalaceRef(id="test-palace")
+    col = backend.get_collection(palace=palace, collection_name="drawers")
+
+    captured_requests = []
+
+    def mock_request(method, path, data=None, params=None):
+        captured_requests.append((method, path, data, params))
+        return {
+            "drawers": [
+                {
+                    "id": "drawer-1",
+                    "wing": "projects",
+                    "room": "code",
+                    "content": "Verbatim Code Content in R2",
+                    "metadata": {"wing": "projects", "room": "code"},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(col, "_request", mock_request)
+
+    res = col.get(where={"wing": "projects"})
+    assert len(captured_requests) == 1
+    method, path, _, params = captured_requests[0]
+    assert method == "GET"
+    assert path == "/api/drawers"
+    assert params["content"] == "true"
+    assert params["wing"] == "projects"
+    assert res.ids == ["drawer-1"]
+    assert res.documents == ["Verbatim Code Content in R2"]

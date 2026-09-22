@@ -128,12 +128,14 @@ class CloudflareVectorizeCollection(BaseCollection):
             vectorize_vectors.append(v_item)
 
         upsert_fn = getattr(self.vector_index, "upsert", None)
-        if upsert_fn is not None:
-            for i in range(0, len(vectorize_vectors), 500):
-                batch = vectorize_vectors[i : i + 500]
-                res = upsert_fn(batch)
-                if hasattr(res, "__await__"):
-                    await res
+        if upsert_fn is None:
+            raise RuntimeError("Vectorize binding missing 'upsert'")
+
+        for i in range(0, len(vectorize_vectors), 500):
+            batch = vectorize_vectors[i : i + 500]
+            res = upsert_fn(batch)
+            if hasattr(res, "__await__"):
+                await res
 
     async def a_query(
         self,

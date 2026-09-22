@@ -94,12 +94,20 @@ class CloudflareMemPalaceApp:
         if not expected_token:
             expected_token = os.environ.get("MEMPALACE_API_KEY")
 
+        if not expected_token:
+            await self._send_json(
+                send,
+                503,
+                {"error": "Service Unavailable: MEMPALACE_API_KEY is not configured"},
+            )
+            return
+
         auth_header = headers.get(b"authorization", b"").decode("utf-8")
         token = ""
         if auth_header.startswith("Bearer "):
             token = auth_header[7:].strip()
 
-        if expected_token and token != expected_token:
+        if token != expected_token:
             await self._send_json(
                 send,
                 401,
@@ -155,7 +163,8 @@ class CloudflareMemPalaceApp:
             r = body_json.get("room", "inbox")
             c = body_json.get("content", "")
             src = body_json.get("source_file")
-            res = await tools.tool_add_drawer(wing=w, room=r, content=c, source_file=src)
+            did = body_json.get("drawer_id") or body_json.get("id")
+            res = await tools.tool_add_drawer(wing=w, room=r, content=c, source_file=src, drawer_id=did)
             await self._send_json(send, 200, res)
             return
 
@@ -179,7 +188,11 @@ class CloudflareMemPalaceApp:
             room = params.get("room", [None])[0]
             limit = int(params.get("limit", [50])[0])
             offset = int(params.get("offset", [0])[0])
-            res = await tools.tool_list_drawers(wing=wing, room=room, limit=limit, offset=offset)
+            content_param = params.get("content", ["false"])[0].lower()
+            include_content = content_param in ("true", "1", "yes")
+            res = await tools.tool_list_drawers(
+                wing=wing, room=room, limit=limit, offset=offset, include_content=include_content
+            )
             await self._send_json(send, 200, {"drawers": res})
             return
 

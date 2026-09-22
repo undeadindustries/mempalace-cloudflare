@@ -86,6 +86,7 @@ class CloudflareRemoteCollection(BaseCollection):
         for did, doc, meta in zip(ids, documents, metas):
             drawers.append(
                 {
+                    "id": did,
                     "wing": meta.get("wing", "general"),
                     "room": meta.get("room", "inbox"),
                     "content": doc,
@@ -169,7 +170,7 @@ class CloudflareRemoteCollection(BaseCollection):
             out_metas = [it["metadata"] for it in items]
             return GetResult(ids=out_ids, documents=out_docs, metadatas=out_metas)
 
-        params: Dict[str, Any] = {}
+        params: Dict[str, Any] = {"content": "true"}
         if where:
             if "wing" in where:
                 params["wing"] = where["wing"]
