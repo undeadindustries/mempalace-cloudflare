@@ -47,3 +47,6 @@ target/
 *.dylib
 *.exe
 
+# Fork-local project orientation — never commit (see ADR 4 in AGENTS.md)
+AGENTS.md
+
