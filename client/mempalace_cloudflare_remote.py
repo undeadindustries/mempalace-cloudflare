@@ -1,0 +1,267 @@
+"""Cloudflare Remote Backend Plugin for MemPalace.
+
+Enables local CLI, hooks, and MCP servers to connect to a Cloudflare Workers
+MemPalace deployment over HTTPS using Bearer token authentication.
+Zero external dependencies — uses Python standard library `urllib`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Any, ClassVar, Dict, List, Optional
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from mempalace.backends.base import (
+    BaseBackend,
+    BaseCollection,
+    GetResult,
+    HealthStatus,
+    PalaceRef,
+    QueryResult,
+)
+
+
+class CloudflareRemoteCollection(BaseCollection):
+    """Collection proxying operations to a remote Cloudflare Worker over HTTP."""
+
+    def __init__(self, base_url: str, token: str, namespace: Optional[str] = None):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.namespace = namespace
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        url = f"{self.base_url}{path}"
+        if params:
+            url += f"?{urllib.parse.urlencode(params)}"
+
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "User-Agent": "mempalace-cloudflare-remote/0.1.0",
+        }
+        req_body = None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+            req_body = json.dumps(data).encode("utf-8")
+
+        req = urllib.request.Request(url, data=req_body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8")
+            raise RuntimeError(f"Cloudflare Worker HTTP {e.code}: {err_body}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to Cloudflare Worker at {self.base_url}: {e.reason}") from e
+
+    def add(
+        self,
+        *,
+        documents: List[str],
+        ids: List[str],
+        metadatas: Optional[List[dict]] = None,
+        embeddings: Optional[List[List[float]]] = None,
+    ) -> None:
+        self.upsert(documents=documents, ids=ids, metadatas=metadatas, embeddings=embeddings)
+
+    def upsert(
+        self,
+        *,
+        documents: List[str],
+        ids: List[str],
+        metadatas: Optional[List[dict]] = None,
+        embeddings: Optional[List[List[float]]] = None,
+    ) -> None:
+        metas = metadatas or [{} for _ in documents]
+        drawers = []
+        for did, doc, meta in zip(ids, documents, metas):
+            drawers.append(
+                {
+                    "wing": meta.get("wing", "general"),
+                    "room": meta.get("room", "inbox"),
+                    "content": doc,
+                }
+            )
+
+        # Batch checkpoint
+        payload = {
+            "method": "tools/call",
+            "params": {
+                "name": "mempalace_checkpoint",
+                "arguments": {"drawers": drawers},
+            },
+        }
+        self._request("POST", "/mcp", data=payload)
+
+    def query(
+        self,
+        *,
+        query_texts: Optional[List[str]] = None,
+        query_embeddings: Optional[List[List[float]]] = None,
+        n_results: int = 10,
+        where: Optional[dict] = None,
+        where_document: Optional[dict] = None,
+        include: Optional[List[str]] = None,
+    ) -> QueryResult:
+        if not query_texts:
+            return QueryResult(ids=[[]], documents=[[]], metadatas=[[]], distances=[[]])
+
+        query_str = query_texts[0]
+        wing = where.get("wing") if where else None
+        room = where.get("room") if where else None
+
+        res = self._request(
+            "POST",
+            "/api/search",
+            data={
+                "query": query_str,
+                "wing": wing,
+                "room": room,
+                "max_results": n_results,
+            },
+        )
+        hits = res.get("results", [])
+
+        ids = [h["id"] for h in hits]
+        docs = [h.get("text", "") for h in hits]
+        metas = [h.get("metadata", {}) for h in hits]
+        distances = [h.get("distance", 0.0) for h in hits]
+
+        return QueryResult(
+            ids=[ids],
+            documents=[docs],
+            metadatas=[metas],
+            distances=[distances],
+        )
+
+    def get(
+        self,
+        *,
+        ids: Optional[List[str]] = None,
+        where: Optional[dict] = None,
+        where_document: Optional[dict] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        include: Optional[List[str]] = None,
+    ) -> GetResult:
+        if ids:
+            payload = {
+                "method": "tools/call",
+                "params": {
+                    "name": "mempalace_get_drawers",
+                    "arguments": {"drawer_ids": ids},
+                },
+            }
+            res = self._request("POST", "/mcp", data=payload)
+            content_str = res.get("result", {}).get("content", [{}])[0].get("text", "[]")
+            items = json.loads(content_str)
+            out_ids = [it["drawer_id"] for it in items]
+            out_docs = [it["content"] for it in items]
+            out_metas = [it["metadata"] for it in items]
+            return GetResult(ids=out_ids, documents=out_docs, metadatas=out_metas)
+
+        params: Dict[str, Any] = {}
+        if where:
+            if "wing" in where:
+                params["wing"] = where["wing"]
+            if "room" in where:
+                params["room"] = where["room"]
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+
+        res = self._request("GET", "/api/drawers", params=params)
+        drawers = res.get("drawers", [])
+        return GetResult(
+            ids=[d["id"] for d in drawers],
+            documents=[d.get("content", "") for d in drawers],
+            metadatas=[d.get("metadata", {}) for d in drawers],
+        )
+
+    def delete(
+        self,
+        *,
+        ids: Optional[List[str]] = None,
+        where: Optional[dict] = None,
+    ) -> None:
+        if ids:
+            payload = {
+                "method": "tools/call",
+                "params": {
+                    "name": "mempalace_delete_drawers",
+                    "arguments": {"drawer_ids": ids},
+                },
+            }
+            self._request("POST", "/mcp", data=payload)
+
+    def count(self) -> int:
+        res = self._request("GET", "/api/status")
+        return int(res.get("total_drawers", 0))
+
+
+class CloudflareRemoteBackend(BaseBackend):
+    """MemPalace Backend factory connecting to a remote Cloudflare Worker."""
+
+    name: ClassVar[str] = "cloudflare-remote"
+    spec_version: ClassVar[str] = "1.0"
+    capabilities: ClassVar[frozenset[str]] = frozenset(
+        {
+            "supports_namespace_isolation",
+            "server_mode",
+        }
+    )
+    distance_metric: ClassVar[str] = "cosine"
+    maintenance_kinds: ClassVar[frozenset[str]] = frozenset()
+
+    def __init__(self, options: Optional[dict] = None):
+        self.options = options or {}
+
+    def get_collection(
+        self,
+        *,
+        palace: PalaceRef,
+        collection_name: str,
+        create: bool = False,
+        options: Optional[dict] = None,
+    ) -> BaseCollection:
+        self.require_namespace_support(palace)
+        opts = {**self.options, **(options or {})}
+
+        url = (
+            opts.get("url")
+            or os.environ.get("MEMPALACE_CLOUDFLARE_URL")
+            or "http://localhost:8787"
+        )
+        token = (
+            opts.get("token")
+            or os.environ.get("MEMPALACE_CLOUDFLARE_TOKEN")
+            or os.environ.get("MEMPALACE_API_KEY")
+            or ""
+        )
+
+        return CloudflareRemoteCollection(
+            base_url=url,
+            token=token,
+            namespace=palace.namespace,
+        )
+
+    def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus:
+        url = os.environ.get("MEMPALACE_CLOUDFLARE_URL", "http://localhost:8787").rstrip("/")
+        try:
+            req = urllib.request.Request(f"{url}/healthz", method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    return HealthStatus.healthy(f"Connected to Cloudflare Worker at {url}")
+        except Exception as e:
+            return HealthStatus.unhealthy(f"Cannot reach Cloudflare Worker at {url}: {e}")
+        return HealthStatus.healthy()
