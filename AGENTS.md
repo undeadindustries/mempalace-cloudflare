@@ -124,7 +124,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 
 ## Open TODOs
 
-- [ ] Import the rest of the local palace after the 10-drawer dry run (offset 10 in `~/.mempalace/cloudflare-import-progress.json`). Resume with `scripts/import_local_palace.py --resume`. Closets (`mempalace_closets`, ~1.8k) are not part of this import. 34,232 drawer ids exceed Vectorize's 64-byte id limit; those use a sha256 vector key while D1 and R2 keep the original id.
+- [ ] Import the rest of the local palace. Blocked on a plan decision: Vectorize Free stores 5M dimensions (~13,020 vectors at 384 dims) and the palace needs ~21.4M; D1 Free allows 100k row writes/day and each drawer costs ~5 (table + 4 indexes), so ~2.8 days of quota. Workers Paid ($5/month) covers both. 60 drawers are imported so far (offsets 0-9 and 19783-19832; main progress file is at offset 10 in `~/.mempalace/cloudflare-import-progress.json`). Resume with `scripts/import_local_palace.py --resume`. Closets (`mempalace_closets`, ~1.8k) are not part of this import. 34,232 drawer ids exceed Vectorize's 64-byte id limit; those use a sha256 vector key while D1 and R2 keep the original id.
 
 ## Future Roadmap (v2 / Post-v1)
 

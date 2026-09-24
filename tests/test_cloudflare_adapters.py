@@ -210,6 +210,24 @@ def test_long_drawer_id_round_trips_through_vectorize_hash():
     asyncio.run(_test())
 
 
+def test_match_drawer_id_reads_proxied_vectorize_metadata():
+    from types import SimpleNamespace
+
+    from mempalace.cloudflare.vectorize_collection import _match_drawer_id
+
+    class ProxiedMeta:
+        """Stands in for a JsProxy: attribute access, no dict interface."""
+
+        drawer_id = "drawer_original_long_id"
+        wing = "w"
+
+    hashed = SimpleNamespace(id="a" * 64, metadata=ProxiedMeta())
+    assert _match_drawer_id(hashed) == "drawer_original_long_id"
+    plain = SimpleNamespace(id="short-id", metadata=SimpleNamespace(wing="w"))
+    assert _match_drawer_id(plain) == "short-id"
+    assert _match_drawer_id({"id": "x", "metadata": {"drawer_id": "orig"}}) == "orig"
+
+
 def test_workers_ai_embedder():
     async def _test():
         ai = FakeWorkersAI()

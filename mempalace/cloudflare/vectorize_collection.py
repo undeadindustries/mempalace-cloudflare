@@ -38,16 +38,16 @@ def _match_drawer_id(match: Any) -> str:
     the original id rides in metadata so search still hydrates the D1/R2 row.
     """
     if isinstance(match, dict):
-        meta = match.get("metadata") or {}
+        meta = match.get("metadata")
+        vector_id = match.get("id", "")
+    else:
+        meta = getattr(match, "metadata", None)
+        vector_id = getattr(match, "id", "")
+    if isinstance(meta, dict):
         original = meta.get("drawer_id")
-        if original:
-            return str(original)
-        return str(match.get("id", ""))
-    meta = getattr(match, "metadata", None) or {}
-    original = meta.get("drawer_id") if isinstance(meta, dict) else None
-    if original:
-        return str(original)
-    return str(getattr(match, "id", ""))
+    else:
+        original = getattr(meta, "drawer_id", None) if meta is not None else None
+    return str(original) if original else str(vector_id)
 
 
 class CloudflareVectorizeCollection:
