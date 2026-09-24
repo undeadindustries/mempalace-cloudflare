@@ -47,10 +47,8 @@ target/
 *.dylib
 *.exe
 
-# Fork-local project orientation — never commit (see ADR 4 in AGENTS.md)
-AGENTS.md
-
 # BEGIN mempalace-cloudflare fork: per-account Cloudflare config, never commit
+AGENTS.local.md
 wrangler.toml
 .dev.vars*
 .wrangler/

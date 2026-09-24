@@ -207,15 +207,17 @@ The fork is additive. All Cloudflare code is in new files, and no upstream engin
 - `migrations/`, `wrangler.toml.example`, `.env.example`, `scripts/cloudflare_bootstrap.sh`, `scripts/test_smoke.py`
 - `tests/test_cloudflare_*.py`
 
-Two upstream files have fork edits, each inside a marked block:
+Three upstream files differ in the fork:
 
 - `README.md`: this block, kept at the top so that merge conflicts, if any, stay in one place.
-- `.gitignore`: a block that ignores `wrangler.toml`, `.dev.vars*`, and `.wrangler/`, and un-ignores `.env.example`.
+- `.gitignore`: a marked block that ignores `wrangler.toml`, `.dev.vars*`, `.wrangler/`, and `AGENTS.local.md`, and un-ignores `.env.example`.
+- `AGENTS.md`: upstream has a symlink to `CLAUDE.md` here. The fork replaces it with its own agent orientation file.
 
-To pull upstream changes:
+The fork lives on `main`, which is this repository's default branch. `develop` mirrors upstream and has no Cloudflare code. To pull upstream changes into the fork:
 
 ```bash
 git remote add upstream https://github.com/MemPalace/mempalace.git   # first time only
+git checkout main
 git fetch upstream
 git merge upstream/develop
 uv sync --extra dev
@@ -223,9 +225,9 @@ uv run pytest tests/test_cloudflare_*.py
 npx wrangler deploy
 ```
 
-If `README.md` conflicts, keep this block and take upstream's version of everything below it. If `.gitignore` conflicts, keep both upstream's lines and the fork block.
+If `README.md` conflicts, keep this block and take upstream's version of everything below it. If `.gitignore` conflicts, keep both upstream's lines and the fork block. If `AGENTS.md` conflicts, keep the fork's file.
 
-To confirm that the fork is still additive, run `git diff upstream/develop...HEAD --stat`. It should list only the files above.
+To confirm that the fork is still additive, run `git diff upstream/develop...main --stat`. It should list only the files above.
 
 One limit: Cloudflare's Python Workers bundle only the files in `mempalace/cloudflare/`. The Worker cannot import the upstream engine at runtime. The fork has its own copies of a few helpers, such as drawer and triple ID hashing and ISO date validation, and it has its own search ranking. Upstream fixes to the CLI, the hooks, and the backend contract reach you through the merge. Upstream fixes to those copied helpers or to upstream search ranking do not change the Worker automatically. After a merge, check the diff of `mempalace/ids.py`, `mempalace/knowledge_graph.py`, and `mempalace/searcher/`, and port relevant changes into `mempalace/cloudflare/`.
 
