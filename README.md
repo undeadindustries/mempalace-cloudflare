@@ -1,3 +1,225 @@
+<!-- BEGIN mempalace-cloudflare fork section. Keep this block when merging upstream. -->
+
+# MemPalace on Cloudflare
+
+This is a fork of [MemPalace](https://github.com/MemPalace/mempalace) that runs the palace as a Cloudflare Worker. Every machine you work on connects to the same palace over HTTPS. You do not install MemPalace, ChromaDB, or an embedding model on each machine.
+
+It is for developers who move between a laptop, a desktop, remote servers, and cloud VMs, and who want one memory that follows them without a local install everywhere.
+
+The upstream MemPalace README starts [below](#mempalace). It describes the engine, the concepts, and the local install.
+
+### Read this first: your data is in your Cloudflare account
+
+Upstream MemPalace is local-first. By default, nothing leaves your machine. This fork changes that:
+
+- Drawer text is stored in your R2 bucket. Metadata and the knowledge graph are stored in your D1 database. Vectors are stored in your Vectorize index. All three are in your own Cloudflare account.
+- Embeddings are computed by Workers AI (`@cf/baai/bge-small-en-v1.5`), so drawer text and search queries are sent to Cloudflare for embedding.
+- A single bearer token protects the Worker. Anyone with the token can read and write the palace.
+
+If you do not want your memory on Cloudflare, use upstream MemPalace instead.
+
+The verbatim rule does not change. Drawers are stored exactly as written. Nothing is summarized or rewritten.
+
+### How it maps to Cloudflare
+
+| MemPalace part | Upstream (local) | This fork |
+| --- | --- | --- |
+| Drawer text (verbatim) | ChromaDB | R2 bucket `mempalace-drawers` |
+| Vector search | ChromaDB | Vectorize index `mempalace-index` (384 dimensions, cosine) |
+| Keyword ranking | SQLite BM25 | BM25 re-rank of Vectorize candidates, in the Worker |
+| Drawer registry and taxonomy | ChromaDB metadata | D1 database `mempalace-kg`, table `drawers` |
+| Knowledge graph | Local SQLite | D1 database `mempalace-kg`, tables `entities` and `triples` |
+| Embeddings | Local ONNX model | Workers AI |
+| MCP server | Local stdio or HTTP process | Worker at `/mcp` (MCP Streamable HTTP, JSON responses) |
+
+### What works today
+
+The Worker exposes 25 MCP tools:
+
+- Palace: `mempalace_status`, `mempalace_list_wings`, `mempalace_list_rooms`, `mempalace_get_taxonomy`, `mempalace_get_aaak_spec`
+- Search and filing: `mempalace_search`, `mempalace_check_duplicate`, `mempalace_add_drawer`, `mempalace_checkpoint`
+- Drawers: `mempalace_get_drawer`, `mempalace_get_drawers`, `mempalace_list_drawers`, `mempalace_update_drawer`, `mempalace_delete_drawer`, `mempalace_delete_drawers`, `mempalace_delete_by_source`
+- Diary: `mempalace_diary_write`, `mempalace_diary_read`, `mempalace_memories_filed_away`
+- Knowledge graph: `mempalace_kg_query`, `mempalace_kg_add`, `mempalace_kg_invalidate`, `mempalace_kg_supersede`, `mempalace_kg_timeline`, `mempalace_kg_stats`
+
+Upstream's local MCP server has more tools. These are not in the Worker yet:
+
+- Mining and sync (`mempalace_mine`, `mempalace_sync`), and anything that reads local files
+- Tunnels, hallways, and graph traversal
+- Mesh peers
+- Hook settings and reconnect
+- Agent coordination (logstream events, tasks, artifacts, patches)
+
+The Worker also has REST routes: `/healthz` (no auth), `/api/status`, `/api/taxonomy`, `/api/search`, and `/api/drawers`.
+
+### Deploy
+
+You need:
+
+- A Cloudflare account
+- Node.js, so that you can run Wrangler with `npx wrangler`
+- Python 3, for the smoke test
+
+**1. Get the code.**
+
+```bash
+git clone https://github.com/undeadindustries/mempalace-cloudflare.git
+cd mempalace-cloudflare
+```
+
+**2. Sign in to Cloudflare.** Use one of these:
+
+```bash
+npx wrangler login
+```
+
+Or use an API token. The token needs edit access to Workers Scripts, Workers AI, D1, Vectorize, and Workers R2 Storage.
+
+```bash
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...
+```
+
+**3. Create the Vectorize index and its metadata indexes.** Create the metadata indexes before you insert any vectors. Vectorize can only filter on a metadata field if its index existed when the vectors were inserted, and the Worker filters on `wing`, `room`, and `source_file`.
+
+```bash
+npx wrangler vectorize create mempalace-index --dimensions=384 --metric=cosine
+npx wrangler vectorize create-metadata-index mempalace-index --property-name=wing --type=string
+npx wrangler vectorize create-metadata-index mempalace-index --property-name=room --type=string
+npx wrangler vectorize create-metadata-index mempalace-index --property-name=source_file --type=string
+```
+
+**4. Create the D1 database.**
+
+```bash
+npx wrangler d1 create mempalace-kg
+```
+
+Copy the `database_id` from the output into `wrangler.toml`, under `[[d1_databases]]`. The id that is in the file now belongs to the maintainer's account. Replace it with yours.
+
+**5. Apply the schema to the remote database.** Use `--remote`. Without it, Wrangler can write to a local development copy, and the deployed Worker then fails because the tables do not exist.
+
+```bash
+npx wrangler d1 execute mempalace-kg --remote --file=migrations/0001_kg.sql
+npx wrangler d1 execute mempalace-kg --remote --file=migrations/0002_registry.sql
+```
+
+**6. Create the R2 bucket.**
+
+```bash
+npx wrangler r2 bucket create mempalace-drawers
+```
+
+**7. Set the API key.** Generate a long random token and store it as a Worker secret. Keep a copy in your password manager. Do not put it in `wrangler.toml` or commit it.
+
+```bash
+openssl rand -hex 32
+npx wrangler secret put MEMPALACE_API_KEY
+```
+
+**8. Deploy.**
+
+```bash
+npx wrangler deploy
+```
+
+Wrangler prints the URL, for example `https://mempalace-cf.<your-subdomain>.workers.dev`.
+
+**9. Run the smoke test.**
+
+```bash
+python3 scripts/test_smoke.py --url https://mempalace-cf.<your-subdomain>.workers.dev --token <your-api-key>
+```
+
+It checks `/healthz`, checks that a request without the token gets `401`, calls `/api/status` with the token, and lists the MCP tools.
+
+### The URL does not change when you redeploy
+
+The workers.dev URL is `<worker name>.<account subdomain>.workers.dev`. `npx wrangler deploy` replaces the code behind that URL and keeps the URL. The URL changes only if you rename the Worker (`name` in `wrangler.toml`), change your account's workers.dev subdomain, move to another Cloudflare account, or set `workers_dev = false`.
+
+You do not need a custom domain or a DNS record.
+
+Cloudflare can also serve a separate preview URL for each version, `<version>-mempalace-cf.<subdomain>.workers.dev`. Those URLs change with every deploy, and they expose the same Worker on more hostnames. To turn them off, add `preview_urls = false` to `wrangler.toml` and deploy again.
+
+### Connect your machines
+
+On each machine, put the API key in an environment variable, for example in your shell profile:
+
+```bash
+export MEMPALACE_API_KEY=<your-api-key>
+```
+
+**Cursor.** Add the Worker to `~/.cursor/mcp.json`. Cursor reads `${env:MEMPALACE_API_KEY}` from the environment, so the key stays out of the file.
+
+```json
+{
+  "mcpServers": {
+    "mempalace": {
+      "url": "https://mempalace-cf.<your-subdomain>.workers.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:MEMPALACE_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+**Other MCP clients.** Any client that supports MCP over Streamable HTTP and custom request headers can connect. Point it at `https://mempalace-cf.<your-subdomain>.workers.dev/mcp` and send `Authorization: Bearer <your-api-key>`.
+
+**The `mempalace` CLI (optional).** If you want the CLI on a machine, install upstream MemPalace and the client plugin in this repo into the same environment. The plugin adds a `cloudflare-remote` backend that sends reads and writes to the Worker.
+
+```bash
+pip install -e client/
+export MEMPALACE_BACKEND=cloudflare-remote
+export MEMPALACE_CLOUDFLARE_URL=https://mempalace-cf.<your-subdomain>.workers.dev
+export MEMPALACE_CLOUDFLARE_TOKEN=<your-api-key>
+```
+
+This installs MemPalace on that machine. Skip it on machines where an MCP client is enough.
+
+### Security
+
+- Every route except `/healthz` requires `Authorization: Bearer <token>`. A missing or wrong token gets `401`. If the secret is not set, the Worker returns `503` and does not serve data.
+- To rotate the key, run `npx wrangler secret put MEMPALACE_API_KEY` with a new value, then update the environment variable on each machine.
+- The token is the only access control. Treat it like a password.
+
+### Cost
+
+The fork is built to stay inside Cloudflare's free allowances for one person's use: Workers, Workers AI, D1, R2, and Vectorize. Free limits change, so check [Cloudflare's Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) against your own usage.
+
+### Getting upstream fixes
+
+The fork is additive. All Cloudflare code is in new files, and no upstream engine file is changed:
+
+- `mempalace/cloudflare/`: the Worker entrypoint and the Cloudflare adapters
+- `mempalace/backends/cloudflare_vectorize.py`: a backend registered through the upstream backend registry
+- `client/`: the `cloudflare-remote` client plugin
+- `migrations/`, `wrangler.toml`, `scripts/cloudflare_bootstrap.sh`, `scripts/test_smoke.py`
+- `tests/test_cloudflare_*.py`
+
+This README block is the one exception. It is at the top of `README.md` so that merge conflicts, if any, stay in one place.
+
+To pull upstream changes:
+
+```bash
+git remote add upstream https://github.com/MemPalace/mempalace.git   # first time only
+git fetch upstream
+git merge upstream/develop
+uv sync --extra dev
+uv run pytest tests/test_cloudflare_*.py
+npx wrangler deploy
+```
+
+If `README.md` conflicts, keep this block and take upstream's version of everything below it.
+
+To confirm that the fork is still additive, run `git diff upstream/develop...HEAD --stat`. It should list only the files above.
+
+One limit: Cloudflare's Python Workers bundle only the files in `mempalace/cloudflare/`. The Worker cannot import the upstream engine at runtime. The fork has its own copies of a few helpers, such as drawer and triple ID hashing and ISO date validation, and it has its own search ranking. Upstream fixes to the CLI, the hooks, and the backend contract reach you through the merge. Upstream fixes to those copied helpers or to upstream search ranking do not change the Worker automatically. After a merge, check the diff of `mempalace/ids.py`, `mempalace/knowledge_graph.py`, and `mempalace/searcher/`, and port relevant changes into `mempalace/cloudflare/`.
+
+<!-- END mempalace-cloudflare fork section -->
+
+---
+
 <div align="center">
 
 <img src="assets/mempalace_logo.png" alt="MemPalace" width="240">
