@@ -69,55 +69,65 @@ cd mempalace-cloudflare
 
 **2. Sign in to Cloudflare.** Use one of these:
 
+- **API token (works without a browser).** Copy the template and fill in both values. `.env.example` lists the token permissions it needs. Wrangler reads `.env` from the project root on every command.
+
+  ```bash
+  cp .env.example .env
+  ```
+
+- **Browser login.**
+
+  ```bash
+  npx wrangler login
+  ```
+
+`.env` and `wrangler.toml` are gitignored. Only the `.example` templates are committed.
+
+**3. Create the Cloudflare resources and `wrangler.toml`.**
+
 ```bash
-npx wrangler login
+scripts/cloudflare_bootstrap.sh
 ```
 
-Or use an API token. The token needs edit access to Workers Scripts, Workers AI, D1, Vectorize, and Workers R2 Storage.
+The script:
 
-```bash
-export CLOUDFLARE_API_TOKEN=...
-export CLOUDFLARE_ACCOUNT_ID=...
-```
+- creates the Vectorize index and its `wing`, `room`, and `source_file` metadata indexes
+- creates the D1 database and its tables
+- creates the R2 bucket
+- writes `wrangler.toml` from `wrangler.toml.example` with your D1 database id
+- asks for the API key and stores it as the `MEMPALACE_API_KEY` Worker secret
 
-**3. Create the Vectorize index and its metadata indexes.** Create the metadata indexes before you insert any vectors. Vectorize can only filter on a metadata field if its index existed when the vectors were inserted, and the Worker filters on `wing`, `room`, and `source_file`.
+It checks each resource first and creates only what is missing, so you can run it again after a failure. It never deletes anything. If `wrangler.toml` already points at a different D1 database, the script stops instead of overwriting the file.
+
+For the API key, generate a long random token, for example with `openssl rand -hex 32`, and keep a copy in your password manager. Do not put it in `wrangler.toml` or `.env`, and do not commit it.
+
+<details>
+<summary>Doing step 3 by hand</summary>
+
+Create the metadata indexes before you insert any vectors. Vectorize can only filter on a metadata field if its index existed when the vectors were inserted.
 
 ```bash
 npx wrangler vectorize create mempalace-index --dimensions=384 --metric=cosine
 npx wrangler vectorize create-metadata-index mempalace-index --property-name=wing --type=string
 npx wrangler vectorize create-metadata-index mempalace-index --property-name=room --type=string
 npx wrangler vectorize create-metadata-index mempalace-index --property-name=source_file --type=string
-```
 
-**4. Create the D1 database.**
-
-```bash
 npx wrangler d1 create mempalace-kg
-```
+cp wrangler.toml.example wrangler.toml
+# Paste the database_id printed by `d1 create` into wrangler.toml.
 
-Copy the `database_id` from the output into `wrangler.toml`, under `[[d1_databases]]`. The id that is in the file now belongs to the maintainer's account. Replace it with yours.
-
-**5. Apply the schema to the remote database.** Use `--remote`. Without it, Wrangler can write to a local development copy, and the deployed Worker then fails because the tables do not exist.
-
-```bash
 npx wrangler d1 execute mempalace-kg --remote --file=migrations/0001_kg.sql
 npx wrangler d1 execute mempalace-kg --remote --file=migrations/0002_registry.sql
-```
 
-**6. Create the R2 bucket.**
-
-```bash
 npx wrangler r2 bucket create mempalace-drawers
-```
-
-**7. Set the API key.** Generate a long random token and store it as a Worker secret. Keep a copy in your password manager. Do not put it in `wrangler.toml` or commit it.
-
-```bash
-openssl rand -hex 32
 npx wrangler secret put MEMPALACE_API_KEY
 ```
 
-**8. Deploy.**
+Use `--remote` on `d1 execute`. Without it, Wrangler can write to a local development copy, and the deployed Worker then fails because the tables do not exist.
+
+</details>
+
+**4. Deploy.**
 
 ```bash
 npx wrangler deploy
@@ -125,7 +135,7 @@ npx wrangler deploy
 
 Wrangler prints the URL, for example `https://mempalace-cf.<your-subdomain>.workers.dev`.
 
-**9. Run the smoke test.**
+**5. Run the smoke test.**
 
 ```bash
 python3 scripts/test_smoke.py --url https://mempalace-cf.<your-subdomain>.workers.dev --token <your-api-key>
@@ -194,10 +204,13 @@ The fork is additive. All Cloudflare code is in new files, and no upstream engin
 - `mempalace/cloudflare/`: the Worker entrypoint and the Cloudflare adapters
 - `mempalace/backends/cloudflare_vectorize.py`: a backend registered through the upstream backend registry
 - `client/`: the `cloudflare-remote` client plugin
-- `migrations/`, `wrangler.toml`, `scripts/cloudflare_bootstrap.sh`, `scripts/test_smoke.py`
+- `migrations/`, `wrangler.toml.example`, `.env.example`, `scripts/cloudflare_bootstrap.sh`, `scripts/test_smoke.py`
 - `tests/test_cloudflare_*.py`
 
-This README block is the one exception. It is at the top of `README.md` so that merge conflicts, if any, stay in one place.
+Two upstream files have fork edits, each inside a marked block:
+
+- `README.md`: this block, kept at the top so that merge conflicts, if any, stay in one place.
+- `.gitignore`: a block that ignores `wrangler.toml`, `.dev.vars*`, and `.wrangler/`, and un-ignores `.env.example`.
 
 To pull upstream changes:
 
@@ -210,7 +223,7 @@ uv run pytest tests/test_cloudflare_*.py
 npx wrangler deploy
 ```
 
-If `README.md` conflicts, keep this block and take upstream's version of everything below it.
+If `README.md` conflicts, keep this block and take upstream's version of everything below it. If `.gitignore` conflicts, keep both upstream's lines and the fork block.
 
 To confirm that the fork is still additive, run `git diff upstream/develop...HEAD --stat`. It should list only the files above.
 

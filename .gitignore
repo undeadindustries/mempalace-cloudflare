@@ -50,3 +50,10 @@ target/
 # Fork-local project orientation — never commit (see ADR 4 in AGENTS.md)
 AGENTS.md
 
+# BEGIN mempalace-cloudflare fork: per-account Cloudflare config, never commit
+wrangler.toml
+.dev.vars*
+.wrangler/
+!.env.example
+# END mempalace-cloudflare fork
+

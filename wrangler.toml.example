@@ -1,0 +1,42 @@
+# Wrangler config template for the Cloudflare-hosted MemPalace Worker.
+#
+# Setup:
+#   1. Run scripts/cloudflare_bootstrap.sh. It creates the Cloudflare
+#      resources and writes wrangler.toml from this file with your D1 id.
+#   Or, by hand:
+#   1. cp wrangler.toml.example wrangler.toml
+#   2. npx wrangler d1 create mempalace-kg
+#   3. Paste the printed database_id below.
+#
+# wrangler.toml is gitignored because it holds your account's resource ids.
+# Never commit it, and never put MEMPALACE_API_KEY here. The key is a Worker
+# secret: npx wrangler secret put MEMPALACE_API_KEY
+#
+# If you rename the Worker or any resource, change the matching constant at
+# the top of scripts/cloudflare_bootstrap.sh too.
+
+# The Worker name is part of the URL: https://<name>.<subdomain>.workers.dev
+name = "mempalace-cf"
+main = "mempalace/cloudflare/entrypoint.py"
+compatibility_date = "2024-04-05"
+compatibility_flags = ["python_workers"]
+
+# Uncomment to turn off the per-version preview URLs, which change on every
+# deploy and expose the Worker on extra hostnames.
+# preview_urls = false
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "mempalace-index"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mempalace-kg"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "mempalace-drawers"
