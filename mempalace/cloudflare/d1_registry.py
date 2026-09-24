@@ -8,6 +8,11 @@ Complements Vectorize (ANN) and R2 (verbatim bodies).
 import json
 from typing import Any, Dict, List, Optional
 
+try:
+    from .jsutil import bind_params
+except (ImportError, ValueError):
+    from jsutil import bind_params  # type: ignore
+
 
 def _to_py_dict(obj: Any) -> Any:
     """Convert a JsProxy, D1 result, or dict into plain Python values.
@@ -54,7 +59,7 @@ class D1DrawerRegistry:
     ) -> List[Dict[str, Any]]:
         stmt = self.db.prepare(sql)
         if params:
-            stmt = stmt.bind(*params)
+            stmt = bind_params(stmt, params)
 
         res = getattr(stmt, "all", None)
         if res is not None:
@@ -90,7 +95,7 @@ class D1DrawerRegistry:
     async def _execute_raw(self, sql: str, params: Optional[List[Any]] = None) -> Any:
         stmt = self.db.prepare(sql)
         if params:
-            stmt = stmt.bind(*params)
+            stmt = bind_params(stmt, params)
 
         run_fn = getattr(stmt, "run", None)
         if run_fn is not None:

@@ -5,7 +5,25 @@ dict is stringified and rejected. CPython unit tests have no Pyodide, so the
 original object is returned unchanged.
 """
 
-from typing import Any
+import json
+from typing import Any, Sequence
+
+
+def bind_params(stmt: Any, params: Sequence[Any]) -> Any:
+    """Bind D1 parameters, sending Python ``None`` as SQL NULL.
+
+    Pyodide passes ``None`` to JavaScript as ``undefined``, which D1 rejects
+    with D1_TYPE_ERROR. Parsing the list as JSON on the JS side yields a real
+    ``null``, and ``Function.apply`` keeps it from turning back into ``None``.
+    """
+    if None not in params:
+        return stmt.bind(*params)
+    try:
+        import js
+    except ImportError:
+        return stmt.bind(*params)
+    js_params = js.JSON.parse(json.dumps(list(params)))
+    return stmt.bind.apply(stmt, js_params)
 
 
 def as_js(value: Any) -> Any:

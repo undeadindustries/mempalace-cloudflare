@@ -11,6 +11,11 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from .jsutil import bind_params
+except (ImportError, ValueError):
+    from jsutil import bind_params  # type: ignore
+
 _ISO_DATE_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$")
 _ISO_UTC_DATETIME_RE = re.compile(
     r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
@@ -154,7 +159,7 @@ class D1KnowledgeGraph:
         """Run a query against D1 and return list of result row dicts."""
         stmt = self.db.prepare(sql)
         if params:
-            stmt = stmt.bind(*params)
+            stmt = bind_params(stmt, params)
 
         res = getattr(stmt, "all", None)
         if res is not None:
@@ -190,7 +195,7 @@ class D1KnowledgeGraph:
         """Execute a mutation against D1."""
         stmt = self.db.prepare(sql)
         if params:
-            stmt = stmt.bind(*params)
+            stmt = bind_params(stmt, params)
 
         run_fn = getattr(stmt, "run", None)
         if run_fn is not None:
@@ -214,7 +219,7 @@ class D1KnowledgeGraph:
         for sql, params in statements:
             stmt = self.db.prepare(sql)
             if params:
-                stmt = stmt.bind(*params)
+                stmt = bind_params(stmt, params)
             prepared_stmts.append(stmt)
 
         batch_fn = getattr(self.db, "batch", None)

@@ -228,6 +228,17 @@ def test_match_drawer_id_reads_proxied_vectorize_metadata():
     assert _match_drawer_id({"id": "x", "metadata": {"drawer_id": "orig"}}) == "orig"
 
 
+def test_registry_stores_drawer_without_source_file_as_null():
+    async def _test():
+        db = FakeD1Database()
+        reg = D1DrawerRegistry(db)
+        await reg.upsert_drawer("d-nosrc", "w", "r", "drawers/d-nosrc.txt", "h", {}, None)
+        row = db.conn.execute("SELECT source_file FROM drawers WHERE id = 'd-nosrc'").fetchone()
+        assert row[0] is None
+
+    asyncio.run(_test())
+
+
 def test_workers_ai_embedder():
     async def _test():
         ai = FakeWorkersAI()
