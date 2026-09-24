@@ -42,6 +42,8 @@ EXAMPLE:
 Read AAAK naturally — expand codes mentally, treat *markers* as emotional context.
 When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
+MAX_PAGE_LIMIT = 100
+
 
 class CloudflarePalaceTools:
     """Dispatches MCP tool calls to Cloudflare D1, R2, Vectorize, and Workers AI."""
@@ -468,10 +470,12 @@ class CloudflarePalaceTools:
         if room:
             where["room"] = room
 
+        clamped_max = max(1, min(int(max_results), MAX_PAGE_LIMIT))
+
         return await execute_hybrid_search(
             collection=self.col,
             query=query,
-            n_results=max_results,
+            n_results=clamped_max,
             where=where if where else None,
         )
 
@@ -571,7 +575,11 @@ class CloudflarePalaceTools:
         offset: int = 0,
         include_content: bool = False,
     ) -> List[Dict[str, Any]]:
-        drawers = await self.reg.list_drawers(wing=wing, room=room, limit=limit, offset=offset)
+        clamped_limit = max(1, min(int(limit), MAX_PAGE_LIMIT))
+        safe_offset = max(0, int(offset))
+        drawers = await self.reg.list_drawers(
+            wing=wing, room=room, limit=clamped_limit, offset=safe_offset
+        )
         if include_content and drawers:
             ids = [d["id"] for d in drawers]
             docs_map = await self.r2.get_drawers(ids)
@@ -695,9 +703,11 @@ class CloudflarePalaceTools:
         limit: int = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        events = await self.kg.timeline(entity=entity, limit=limit, offset=offset)
+        clamped_limit = max(1, min(int(limit), MAX_PAGE_LIMIT))
+        safe_offset = max(0, int(offset))
+        events = await self.kg.timeline(entity=entity, limit=clamped_limit, offset=safe_offset)
         total = await self.kg.timeline_total(entity=entity)
-        return {"events": events, "total": total, "limit": limit, "offset": offset}
+        return {"events": events, "total": total, "limit": clamped_limit, "offset": safe_offset}
 
     async def tool_kg_stats(self) -> Dict[str, Any]:
         return await self.kg.stats()

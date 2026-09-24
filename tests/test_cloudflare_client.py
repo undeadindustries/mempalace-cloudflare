@@ -5,6 +5,7 @@ correctly interact with the Cloudflare Worker API.
 """
 
 import io
+import json
 import sys
 
 import pytest
@@ -107,6 +108,67 @@ def test_client_health_sends_access_headers(monkeypatch, no_access_env):
     assert captured[0].get_header("Cf-access-client-id") == "abc.access"
     # Cloudflare's bot protection can 403 urllib's default "Python-urllib" agent.
     assert captured[0].get_header("User-agent").startswith("mempalace-cloudflare-remote/")
+
+
+def test_client_resolves_settings_from_config_json(monkeypatch, tmp_path, no_access_env):
+    mock_cfg = tmp_path / "config.json"
+    mock_cfg.write_text(
+        json.dumps(
+            {
+                "cloudflare_url": "http://config-worker",
+                "cloudflare_token": "config-tok",
+                "cloudflare_access_client_id": "cfg.id",
+                "cloudflare_access_client_secret": "cfg.secret",
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "mempalace_cloudflare_remote._read_config_dict",
+        lambda: json.loads(mock_cfg.read_text()),
+    )
+
+    backend = CloudflareRemoteBackend()
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    captured = _capture_urlopen(monkeypatch, b'{"total_drawers": 0}')
+
+    col.count()
+    assert col.base_url == "http://config-worker"
+    assert col.token == "config-tok"
+    assert captured[0].get_header("Cf-access-client-id") == "cfg.id"
+    assert captured[0].get_header("Cf-access-client-secret") == "cfg.secret"
+
+
+def test_client_env_overrides_config_json(monkeypatch, tmp_path, no_access_env):
+    mock_cfg = tmp_path / "config.json"
+    mock_cfg.write_text(
+        json.dumps(
+            {
+                "cloudflare_url": "http://config-worker",
+                "cloudflare_token": "config-tok",
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "mempalace_cloudflare_remote._read_config_dict",
+        lambda: json.loads(mock_cfg.read_text()),
+    )
+    monkeypatch.setenv("MEMPALACE_CLOUDFLARE_URL", "http://env-worker")
+    monkeypatch.setenv("MEMPALACE_CLOUDFLARE_TOKEN", "env-tok")
+
+    backend = CloudflareRemoteBackend()
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    assert col.base_url == "http://env-worker"
+    assert col.token == "env-tok"
+
+
+def test_client_options_override_env(monkeypatch, no_access_env):
+    monkeypatch.setenv("MEMPALACE_CLOUDFLARE_URL", "http://env-worker")
+    monkeypatch.setenv("MEMPALACE_CLOUDFLARE_TOKEN", "env-tok")
+
+    backend = CloudflareRemoteBackend(options={"url": "http://opts-worker", "token": "opts-tok"})
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    assert col.base_url == "http://opts-worker"
+    assert col.token == "opts-tok"
 
 
 def test_client_collection_construction():

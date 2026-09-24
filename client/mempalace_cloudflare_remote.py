@@ -30,6 +30,52 @@ ACCESS_CLIENT_SECRET_ENV = "CF_ACCESS_CLIENT_SECRET"
 _HTTP_FORBIDDEN = 403
 
 
+def _read_config_dict() -> Dict[str, Any]:
+    """Safely read ~/.mempalace/config.json if it exists."""
+    cfg_path = os.path.expanduser("~/.mempalace/config.json")
+    try:
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {}
+
+
+def resolve_setting(
+    key: str,
+    options: Optional[Dict[str, Any]] = None,
+    env_vars: Optional[List[str]] = None,
+    config_key: Optional[str] = None,
+    default: str = "",
+) -> str:
+    """Resolve a configuration setting following priority:
+
+    1. Backend options dict
+    2. Environment variables (in given order)
+    3. ~/.mempalace/config.json key
+    4. Default value
+    """
+    opts = options or {}
+    if opts.get(key):
+        return str(opts[key]).strip()
+
+    for ev in env_vars or []:
+        val = os.environ.get(ev)
+        if val:
+            return val.strip()
+
+    if config_key:
+        cfg = _read_config_dict()
+        val = cfg.get(config_key)
+        if val is not None:
+            return str(val).strip()
+
+    return default
+
+
 def resolve_access_headers(options: Dict[str, Any]) -> Dict[str, str]:
     """Build the Cloudflare Access service-token headers, or none.
 
@@ -38,8 +84,18 @@ def resolve_access_headers(options: Dict[str, Any]) -> Dict[str, str]:
     quota. Both halves must be present: sending only one would be rejected by
     Access anyway, and a silent half-configuration is hard to diagnose.
     """
-    client_id = options.get("access_client_id") or os.environ.get(ACCESS_CLIENT_ID_ENV) or ""
-    secret = options.get("access_client_secret") or os.environ.get(ACCESS_CLIENT_SECRET_ENV) or ""
+    client_id = resolve_setting(
+        key="access_client_id",
+        options=options,
+        env_vars=[ACCESS_CLIENT_ID_ENV],
+        config_key="cloudflare_access_client_id",
+    )
+    secret = resolve_setting(
+        key="access_client_secret",
+        options=options,
+        env_vars=[ACCESS_CLIENT_SECRET_ENV],
+        config_key="cloudflare_access_client_secret",
+    )
     if bool(client_id) != bool(secret):
         missing = ACCESS_CLIENT_SECRET_ENV if client_id else ACCESS_CLIENT_ID_ENV
         raise ValueError(
@@ -277,14 +333,19 @@ class CloudflareRemoteBackend(BaseBackend):
         self.require_namespace_support(palace)
         opts = {**self.options, **(options or {})}
 
-        url = (
-            opts.get("url") or os.environ.get("MEMPALACE_CLOUDFLARE_URL") or "http://localhost:8787"
+        url = resolve_setting(
+            key="url",
+            options=opts,
+            env_vars=["MEMPALACE_CLOUDFLARE_URL"],
+            config_key="cloudflare_url",
+            default="http://localhost:8787",
         )
-        token = (
-            opts.get("token")
-            or os.environ.get("MEMPALACE_CLOUDFLARE_TOKEN")
-            or os.environ.get("MEMPALACE_API_KEY")
-            or ""
+        token = resolve_setting(
+            key="token",
+            options=opts,
+            env_vars=["MEMPALACE_CLOUDFLARE_TOKEN", "MEMPALACE_API_KEY"],
+            config_key="cloudflare_token",
+            default="",
         )
 
         return CloudflareRemoteCollection(
@@ -295,10 +356,12 @@ class CloudflareRemoteBackend(BaseBackend):
         )
 
     def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus:
-        url = (
-            self.options.get("url")
-            or os.environ.get("MEMPALACE_CLOUDFLARE_URL")
-            or "http://localhost:8787"
+        url = resolve_setting(
+            key="url",
+            options=self.options,
+            env_vars=["MEMPALACE_CLOUDFLARE_URL"],
+            config_key="cloudflare_url",
+            default="http://localhost:8787",
         ).rstrip("/")
         try:
             headers = {"User-Agent": USER_AGENT, **resolve_access_headers(self.options)}

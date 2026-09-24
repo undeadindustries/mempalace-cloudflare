@@ -45,10 +45,17 @@ async def send_asgi_request(
     if body is not None:
         body_bytes = json.dumps(body).encode("utf-8") if not isinstance(body, bytes) else body
 
+    scope_path = path
+    query_string = b""
+    if "?" in path:
+        scope_path, qs = path.split("?", 1)
+        query_string = qs.encode("utf-8")
+
     scope = {
         "type": "http",
         "method": method,
-        "path": path,
+        "path": scope_path,
+        "query_string": query_string,
         "headers": req_headers,
         "env": env,
     }
@@ -472,5 +479,81 @@ def test_tool_check_duplicate_respects_wing_scope():
         # Check duplicate scoped to wing_b -> not found
         res_b = await tools.tool_check_duplicate(content=content, wing="wing_b")
         assert res_b["is_duplicate"] is False
+
+    asyncio.run(_test())
+
+
+def test_tool_paging_clamping():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        tools = app._get_tools(env)
+
+        # tool_list_drawers clamps limit to MAX_PAGE_LIMIT (100) and negative offset to 0
+        drawers = await tools.tool_list_drawers(limit=9999, offset=-5)
+        assert isinstance(drawers, list)
+
+        # tool_kg_timeline clamps limit and safe offset
+        timeline = await tools.tool_kg_timeline(limit=5000, offset=-10)
+        assert timeline["limit"] == 100
+        assert timeline["offset"] == 0
+
+        # tool_search clamps max_results
+        hits = await tools.tool_search(query="test", max_results=1000)
+        assert isinstance(hits, list)
+
+    asyncio.run(_test())
+
+
+def test_auth_compare_digest_unicode_and_invalid():
+    async def _test():
+        env = create_test_env(api_key="secret-key-123")
+        app = CloudflareMemPalaceApp(env=env)
+
+        # 1. Non-ASCII bearer token gives 401, not 500
+        headers_unicode = {b"authorization": "Bearer 🔑-unicode-key".encode("utf-8")}
+        res = await send_asgi_request(app, "GET", "/api/status", headers=headers_unicode)
+        assert res["status"] == 401
+
+        # 2. Wrong token gives 401
+        headers_wrong = {b"authorization": b"Bearer wrong-token"}
+        res = await send_asgi_request(app, "GET", "/api/status", headers=headers_wrong)
+        assert res["status"] == 401
+
+        # 3. Exact matching token gives 200
+        headers_correct = {b"authorization": b"Bearer secret-key-123"}
+        res = await send_asgi_request(app, "GET", "/api/status", headers=headers_correct)
+        assert res["status"] == 200
+
+    asyncio.run(_test())
+
+
+def test_api_drawers_limit_validation_and_clamping():
+    async def _test():
+        env = create_test_env(api_key="secret")
+        app = CloudflareMemPalaceApp(env=env)
+        auth = {b"authorization": b"Bearer secret"}
+
+        # Non-numeric limit -> 400
+        res = await send_asgi_request(app, "GET", "/api/drawers?limit=abc", headers=auth)
+        assert res["status"] == 400
+        assert "Invalid limit" in res["json"].get("error", "")
+
+        # Negative limit -> 400
+        res = await send_asgi_request(app, "GET", "/api/drawers?limit=-5", headers=auth)
+        assert res["status"] == 400
+
+        # Non-numeric offset -> 400
+        res = await send_asgi_request(app, "GET", "/api/drawers?offset=xyz", headers=auth)
+        assert res["status"] == 400
+
+        # Negative offset -> 400
+        res = await send_asgi_request(app, "GET", "/api/drawers?offset=-1", headers=auth)
+        assert res["status"] == 400
+
+        # Over-large limit is clamped to MAX_PAGE_LIMIT (100) and succeeds
+        res = await send_asgi_request(app, "GET", "/api/drawers?limit=5000", headers=auth)
+        assert res["status"] == 200
+        assert "drawers" in res["json"]
 
     asyncio.run(_test())

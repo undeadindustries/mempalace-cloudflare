@@ -190,6 +190,22 @@ If you would rather keep the values out of the file, Cursor also accepts `${env:
 
 **The `mempalace` CLI (optional).** If you want the CLI on a machine, install upstream MemPalace and the client plugin in this repo into the same environment. The plugin adds a `cloudflare-remote` backend that sends reads and writes to the Worker.
 
+You can configure the connection via `~/.mempalace/config.json`:
+
+```json
+{
+  "backend": "cloudflare-remote",
+  "cloudflare_url": "https://mempalace-cf.<your-subdomain>.workers.dev",
+  "cloudflare_token": "<your-api-key>",
+  "cloudflare_access_client_id": "<service-token-client-id>",
+  "cloudflare_access_client_secret": "<service-token-client-secret>"
+}
+```
+
+*Note on hooks:* setting `"backend": "cloudflare-remote"` in `config.json` directs `mempalace mine` and hook saves to the remote Worker rather than local storage. Leave your existing local backend selected until you are ready to switch your primary palace to Cloudflare.
+
+Alternatively, you can provide the credentials via environment variables:
+
 ```bash
 pip install -e client/
 export MEMPALACE_BACKEND=cloudflare-remote
@@ -199,9 +215,20 @@ export CF_ACCESS_CLIENT_ID=<service-token-client-id>
 export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
 ```
 
-The plugin sends the Access service token when `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set. Set both or neither. If only one is set, the plugin stops with an error rather than sending requests that Access would refuse.
+The plugin sends the Access service token when `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (or their `config.json` keys) are set. Set both or neither. If only one is set, the plugin stops with an error rather than sending requests that Access would refuse.
 
 This installs MemPalace on that machine. Skip it on machines where an MCP client is enough.
+
+*Python certificates on macOS:* Python.org official installers on macOS do not install root certificates into Python's OpenSSL environment by default. If the CLI fails with `CERTIFICATE_VERIFY_FAILED`, run `/Applications/Python 3.12/Install Certificates.command` (adjusting for your Python version) or set `export SSL_CERT_FILE=$(python3 -m certifi)`.
+
+### Backups (Optional)
+
+Backups are completely optional and up to each user:
+- **D1 Knowledge Graph:** Cloudflare D1 provides automatic Time Travel backups (retained for 7 days on the Free plan). You can take a manual snapshot at any time with:
+  ```bash
+  npx wrangler d1 export mempalace-kg --remote --output=./mempalace-kg-backup.sql
+  ```
+- **R2 Drawer Text:** Verbatim files in the R2 `mempalace-drawers` bucket can be synced or copied locally using any S3-compatible tool or `rclone` if offline redundancy is desired.
 
 ### Security
 

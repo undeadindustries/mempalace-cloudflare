@@ -25,6 +25,9 @@ compatibility_flags = ["python_workers"]
 # extra hostnames. Keep them off unless you need them.
 preview_urls = false
 
+[observability]
+enabled = true
+
 [ai]
 binding = "AI"
 

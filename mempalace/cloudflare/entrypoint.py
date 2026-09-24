@@ -8,6 +8,7 @@ Handles:
 - Dynamic Cloudflare binding resolution (env.AI, env.VECTOR_INDEX, env.DB, env.BUCKET)
 """
 
+import hmac
 import json
 import logging
 import os
@@ -15,6 +16,9 @@ from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
 logger = logging.getLogger(__name__)
+
+# Maximum page size for list endpoints and tool queries
+MAX_PAGE_LIMIT = 100
 
 # JSON-RPC notifications are owed no body. Upstream MCP HTTP uses 202.
 _HTTP_ACCEPTED = 202
@@ -167,7 +171,9 @@ class CloudflareMemPalaceApp:
         if auth_header.startswith("Bearer "):
             token = auth_header[7:].strip()
 
-        if token != expected_token:
+        if not token or not hmac.compare_digest(
+            token.encode("utf-8"), expected_token.encode("utf-8")
+        ):
             await self._send_json(
                 send,
                 401,
@@ -217,7 +223,14 @@ class CloudflareMemPalaceApp:
             q = body_json.get("query", "")
             wing = body_json.get("wing")
             room = body_json.get("room")
-            max_res = body_json.get("max_results", 10)
+            raw_max = body_json.get("max_results", 10)
+            try:
+                max_res = int(raw_max)
+                if max_res < 1:
+                    max_res = 10
+            except (ValueError, TypeError):
+                max_res = 10
+            max_res = min(max_res, MAX_PAGE_LIMIT)
             res = await tools.tool_search(query=q, wing=wing, room=room, max_results=max_res)
             await self._send_json(send, 200, {"results": res})
             return
@@ -248,21 +261,45 @@ class CloudflareMemPalaceApp:
             return
 
         if path == "/api/drawers" and method == "GET":
-            query_str = scope.get("query_string", b"").decode("utf-8")
-            params = parse_qs(query_str)
-            wing = params.get("wing", [None])[0]
-            room = params.get("room", [None])[0]
-            limit = int(params.get("limit", [50])[0])
-            offset = int(params.get("offset", [0])[0])
-            content_param = params.get("content", ["false"])[0].lower()
-            include_content = content_param in ("true", "1", "yes")
-            res = await tools.tool_list_drawers(
-                wing=wing, room=room, limit=limit, offset=offset, include_content=include_content
-            )
-            await self._send_json(send, 200, {"drawers": res})
+            await self._handle_get_drawers(scope, send, tools)
             return
 
         await self._send_json(send, 404, {"error": f"Not found: {method} {path}"})
+
+    async def _handle_get_drawers(
+        self, scope: Dict[str, Any], send: Callable, tools: CloudflarePalaceTools
+    ) -> None:
+        query_str = scope.get("query_string", b"").decode("utf-8")
+        params = parse_qs(query_str)
+        wing = params.get("wing", [None])[0]
+        room = params.get("room", [None])[0]
+
+        raw_limit = params.get("limit", ["50"])[0]
+        try:
+            limit = int(raw_limit)
+            if limit < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            await self._send_json(send, 400, {"error": f"Invalid limit parameter: {raw_limit}"})
+            return
+
+        raw_offset = params.get("offset", ["0"])[0]
+        try:
+            offset = int(raw_offset)
+            if offset < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            await self._send_json(send, 400, {"error": f"Invalid offset parameter: {raw_offset}"})
+            return
+
+        limit = min(limit, MAX_PAGE_LIMIT)
+
+        content_param = params.get("content", ["false"])[0].lower()
+        include_content = content_param in ("true", "1", "yes")
+        res = await tools.tool_list_drawers(
+            wing=wing, room=room, limit=limit, offset=offset, include_content=include_content
+        )
+        await self._send_json(send, 200, {"drawers": res})
 
     async def _handle_mcp(
         self,
@@ -467,8 +504,16 @@ async def on_fetch(request, env):
     try:
         await app(scope, receive, send)
     except Exception as exc:
-        logger.exception("unhandled error in on_fetch")
-        err_payload = json.dumps({"error": "Internal Server Error", "detail": str(exc)}).encode(
+        cf_ray = "unknown"
+        try:
+            for h_name, h_val in headers_list:
+                if h_name == b"cf-ray":
+                    cf_ray = h_val.decode("latin1", errors="replace")
+                    break
+        except Exception:
+            pass
+        logger.exception("unhandled error in on_fetch (request_id=%s): %s", cf_ray, exc)
+        err_payload = json.dumps({"error": "Internal Server Error", "request_id": cf_ray}).encode(
             "utf-8"
         )
         err_headers = js.Headers.new()

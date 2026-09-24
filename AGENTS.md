@@ -94,12 +94,16 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 8. **Cloudflare Access service token in front of the Worker.** Without it, junk requests still invoke the Worker (and get `401`), so a flood could exhaust the free plan's daily request allowance. Access checks each request at the edge before the Worker runs. Configured in the dashboard, not in code: Worker Access on **all traffic** (production and previews) with a **Service Auth** policy (an Allow policy would send callers to a browser login) holding one service token. Clients send `CF-Access-Client-Id` / `CF-Access-Client-Secret`, read from `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`; the client plugin raises `ValueError` if only one is set. The Worker does not validate the `Cf-Access-Jwt-Assertion` header itself; the bearer token remains the in-Worker check. `preview_urls = false` is set in the template so only the production hostname exists.
 9. **Client requests always send a custom User-Agent.** Cloudflare's bot protection returned `403` to urllib's default `Python-urllib/*` agent on `/healthz` even with a valid service token. Every request in `client/` uses `USER_AGENT`.
 10. **The harness owns its config file.** Docs say what goes in the MCP client's config (`mcp.json` headers as plain values; `${env:NAME}` shown only as an alternative). Protecting that file is the harness's job; the fork does not check file permissions or require environment variables for MCP clients. Keyed entries belong in user-level config, never in a project's `.cursor/mcp.json`.
+11. **R2 bucket lock rejected.** A bucket lock prevents deleting and overwriting objects within retention periods, directly conflicting with verbatim drawer operations `mempalace_delete_drawer` and `mempalace_update_drawer`. Backups remain optional (via D1 Time Travel and manual exports).
+12. **In-Worker Access JWT verification dropped.** Access checks every request at Cloudflare's edge on all hostnames. Preview URLs are disabled, and Worker Bearer token validation provides defence in depth. Validating RS256 JWT signatures inside the Worker Python runtime would require manual WebCrypto JWKS fetching on cold starts without significant security benefit.
 
 ## Current Project Status
 
-- Cloudflare-native MemPalace v1 is deployed behind Cloudflare Access and passing the live smoke test (Access 403 without the service token, then healthz, 401, status, 25 MCP tools). The client plugin's `health()` and `count()` were also verified live through Access.
-- The Cloudflare palace is empty (0 drawers). The maintainers' existing drawers are in their local palace, not on Cloudflare.
-- 32/32 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity). Full suite last run (after merging upstream #2567 and #2569): 5654 passed, 58 skipped, 1 pre-existing failure in `tests/test_embedding.py` (ChromaDB ONNX provider mock, unrelated to the fork). Run the suite outside restrictive sandboxes: `tests/test_antigravity_hooks_shell.py` writes state files outside the repo and fails under a workspace-only sandbox.
+- Cloudflare-native MemPalace v1 is deployed behind Cloudflare Access and passing the live smoke test (Access 403 without the service token, then healthz, 401, status, 25 MCP tools).
+- Hardened ASGI entrypoint: constant-time `hmac.compare_digest` on bearer tokens, generic 500 responses with request correlation IDs, validated and clamped paging (`MAX_PAGE_LIMIT = 100`) on REST and MCP tools, and Workers observability enabled.
+- The Cloudflare palace is empty (0 drawers). The maintainers' existing drawers remain untouched in their local palace (~55k drawers).
+- 38/38 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity, hardening, config resolution).
+- Known constraint: `uv.lock` is stale upstream (`pyproject.toml` pins ruff 0.16.6, lock says 0.16.1), so `uv run` rewrites it locally. Leave it out of fork commits until upstream brings a fresh lock.
 - Free-tier cost target: $0/month for one developer.
 
 ## Completed Milestones
@@ -107,22 +111,19 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 - [x] Adapters: Workers AI, R2, D1 knowledge graph, D1 registry, Vectorize backend
 - [x] Hybrid search (Vectorize candidates + edge BM25 re-ranking)
 - [x] ASGI entrypoint + Bearer middleware + MCP Streamable HTTP (25 tools)
-- [x] `client/` cloudflare-remote plugin
+- [x] `client/` cloudflare-remote plugin with options > env > `~/.mempalace/config.json` priority
 - [x] Bootstrap script, migrations, smoke test
 - [x] Fix 7 Bugbot findings (auth fail-closed, remote ID preservation, verbatim hydration, Vectorize upsert, delete-by-source ordering, duplicate scoping, atomic D1 supersede)
 - [x] Fix 5 Bugbot findings (202 notifications, `kg_add` without `valid_from`, Vectorize → D1 → R2 delete order with ghost-hit filtering, checkpoint `source_file`, request body bytes)
 - [x] Config templates: `wrangler.toml` gitignored and scrubbed from history before first push; `wrangler.toml.example` + `.env.example`; idempotent bootstrap that generates `wrangler.toml`
 - [x] `GET`/`DELETE /mcp` → 405; MCP protocol version negotiation
 - [x] Cloudflare Access service token: client plugin, smoke test and README send the headers; preview URLs off
+- [x] Security hardening: `hmac.compare_digest`, generic 500 with request id, clamped paging, Workers observability
+- [x] Verified Cursor client configuration in `~/.cursor/mcp.json`
 
 ## Open TODOs
 
-- [ ] Verify Cursor end-to-end against the live Worker (a URL entry in `~/.cursor/mcp.json` with the three headers as plain values).
-- [ ] The `mempalace` CLI (and Sagittarius hooks through it) can only take the Worker URL, token and service token from environment variables, because upstream's registry instantiates backends with no options (`registry.py`, `cls()`).
-- [ ] `on_fetch` returns `str(exc)` in the 500 body; consider logging only and returning a generic message.
-- [ ] Security hardening not yet done: `hmac.compare_digest` for the bearer comparison; clamp `limit` on `GET /api/drawers` and reject non-numeric values; enable Workers observability; R2 bucket lock; optional `Cf-Access-Jwt-Assertion` validation in the Worker.
-- [ ] Python.org framework builds of Python on macOS ship without a CA bundle until "Install Certificates.command" is run; the client then fails TLS with `CERTIFICATE_VERIFY_FAILED`. Workaround: `SSL_CERT_FILE=$(python -m certifi)`. Consider documenting it in the README.
-- [ ] `uv.lock` is stale upstream (`pyproject.toml` pins ruff 0.16.6, lock says 0.16.1), so `uv run` rewrites it. Leave it out of fork commits; the next upstream merge should bring a fresh lock.
+- [ ] Import local palace drawers (~55k drawers, ~580 MB ChromaDB + SQLite KG + diaries) to `mempalace-cloudflare`.
 
 ## Future Roadmap (v2 / Post-v1)
 
