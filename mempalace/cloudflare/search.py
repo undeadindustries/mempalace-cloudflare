@@ -9,7 +9,10 @@ import math
 import re
 from typing import Any, Dict, List, Optional
 
-from ._shims import install_shims
+try:
+    from ._shims import install_shims
+except (ImportError, ValueError):
+    from _shims import install_shims  # type: ignore
 
 install_shims()
 

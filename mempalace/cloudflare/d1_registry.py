@@ -9,6 +9,38 @@ import json
 from typing import Any, Dict, List, Optional
 
 
+def _to_py_dict(obj: Any) -> Any:
+    """Convert JsProxy object or dict to Python native types."""
+    if obj is None:
+        return None
+    if hasattr(obj, "to_py"):
+        try:
+            return obj.to_py()
+        except Exception:
+            pass
+    if isinstance(obj, dict):
+        return obj
+    # Check if obj is a JS object that can be converted via dict or dir/getattr
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    # Try converting JsProxy directly if it has entries or properties
+    try:
+        import js
+        # If it's a JS object, Object.entries returns key-value pairs
+        entries = js.Object.entries(obj)
+        res_dict = {}
+        for entry in entries:
+            k = entry[0]
+            v = entry[1]
+            if hasattr(v, "to_py"):
+                v = v.to_py()
+            res_dict[k] = v
+        return res_dict
+    except Exception:
+        pass
+    return obj
+
+
 class D1DrawerRegistry:
     """Manages drawer metadata, taxonomy, and exact-duplicate indexing in D1."""
 
@@ -28,12 +60,19 @@ class D1DrawerRegistry:
         else:
             raise RuntimeError("D1 statement does not support 'all' method")
 
+        raw = _to_py_dict(raw)
+
+        rows = []
         if isinstance(raw, dict):
-            return raw.get("results", [])
+            rows = raw.get("results", [])
         elif hasattr(raw, "results"):
-            return raw.results
+            rows = raw.results
         elif isinstance(raw, list):
-            return raw
+            rows = raw
+
+        rows = _to_py_dict(rows)
+        if isinstance(rows, list):
+            return [_to_py_dict(r) for r in rows]
         return []
 
     async def _first_raw(self, sql: str, params: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:

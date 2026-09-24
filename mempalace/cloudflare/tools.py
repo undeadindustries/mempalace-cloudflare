@@ -8,10 +8,21 @@ from datetime import datetime
 import hashlib
 from typing import Any, Dict, List, Optional
 
-from ._shims import install_shims
-from ..ids import make_drawer_id_from_content
+try:
+    from ._shims import install_shims
+except (ImportError, ValueError):
+    from _shims import install_shims  # type: ignore
 
 install_shims()
+
+
+def make_drawer_id_from_content(wing: str, room: str, content: str) -> str:
+    """Drawer ID matching upstream ids.make_drawer_id_from_content contract."""
+    key = "".join(
+        f"{len(part)}:{part}" for part in [wing, room, content]
+    ).encode()
+    hash24 = hashlib.sha256(key).hexdigest()[:24]
+    return f"drawer_{wing}_{room}_{hash24}"
 
 AAAK_SPEC = """AAAK is a compressed memory dialect that MemPalace uses for efficient storage.
 It is designed to be readable by both humans and LLMs without decoding.
@@ -391,7 +402,10 @@ class CloudflarePalaceTools:
         room: Optional[str] = None,
         max_results: int = 5,
     ) -> List[Dict[str, Any]]:
-        from .search import execute_hybrid_search
+        try:
+            from .search import execute_hybrid_search
+        except (ImportError, ValueError):
+            from search import execute_hybrid_search  # type: ignore
 
         where: Dict[str, Any] = {}
         if wing:
@@ -418,7 +432,10 @@ class CloudflarePalaceTools:
             return {"is_duplicate": True, "exact_match": True, "existing_drawer_id": existing}
 
         # Check semantic similarity using search
-        from .search import execute_hybrid_search
+        try:
+            from .search import execute_hybrid_search
+        except (ImportError, ValueError):
+            from search import execute_hybrid_search  # type: ignore
 
         where: Dict[str, Any] = {}
         if wing:

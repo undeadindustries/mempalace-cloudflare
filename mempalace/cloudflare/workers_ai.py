@@ -58,6 +58,12 @@ class WorkersAIEmbedder:
         if hasattr(res, "__await__"):
             res = await res
 
+        if hasattr(res, "to_py"):
+            try:
+                res = res.to_py()
+            except Exception:
+                pass
+
         # Workers AI returns {"shape": [...], "data": [[...], ...]}
         # or an object with a .data attribute
         if isinstance(res, dict):
@@ -66,5 +72,11 @@ class WorkersAIEmbedder:
             data = res.data
         else:
             raise ValueError(f"Unexpected response format from Workers AI: {type(res)}")
+
+        if hasattr(data, "to_py"):
+            try:
+                data = data.to_py()
+            except Exception:
+                pass
 
         return data

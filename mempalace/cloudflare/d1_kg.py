@@ -5,12 +5,57 @@ Translates SQLite queries to Cloudflare D1 asynchronous calls: `env.DB.prepare(.
 Preserves exact schema, temporal filters, and entity-triple semantics from upstream.
 """
 
-from datetime import datetime
+from datetime import date, datetime
+import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..config import sanitize_iso_temporal
-from ..ids import make_triple_id
+_ISO_DATE_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$")
+_ISO_UTC_DATETIME_RE = re.compile(
+    r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
+    r"T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:Z|\+00:00)$"
+)
+
+
+def _validate_iso_temporal_calendar(value: str) -> None:
+    if _ISO_DATE_RE.match(value):
+        date.fromisoformat(value)
+        return
+    if _ISO_UTC_DATETIME_RE.match(value):
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return
+    raise ValueError
+
+
+def sanitize_iso_temporal(value: Any, field_name: str = "date") -> Optional[str]:
+    """Validate an ISO-8601 date or canonical UTC datetime string."""
+    if value is None or value == "":
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    value = value.strip()
+    try:
+        _validate_iso_temporal_calendar(value)
+    except ValueError:
+        raise ValueError(
+            f"{field_name}={value!r} is not a valid ISO-8601 date or UTC datetime "
+            "(expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)"
+        ) from None
+    if value.endswith("+00:00"):
+        value = f"{value[:-6]}Z"
+    return value
+
+
+def make_triple_id(
+    sub_id: str, predicate: str, obj_id: str, valid_from: str, recorded_at: str
+) -> str:
+    """Triple ID matching upstream ids.make_triple_id contract."""
+    key = "".join(
+        f"{len(part)}:{part}" for part in [valid_from, recorded_at]
+    ).encode()
+    hash12 = hashlib.sha256(key).hexdigest()[:12]
+    return f"t_{sub_id}_{predicate}_{obj_id}_{hash12}"
 
 
 def _escape_like(value: str) -> str:
@@ -67,6 +112,35 @@ def _temporal_filter_sql(as_of: str) -> Tuple[str, List[str]]:
     )
 
 
+def _to_py_dict(obj: Any) -> Any:
+    """Convert JsProxy object or dict to Python native types."""
+    if obj is None:
+        return None
+    if hasattr(obj, "to_py"):
+        try:
+            return obj.to_py()
+        except Exception:
+            pass
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    try:
+        import js
+        entries = js.Object.entries(obj)
+        res_dict = {}
+        for entry in entries:
+            k = entry[0]
+            v = entry[1]
+            if hasattr(v, "to_py"):
+                v = v.to_py()
+            res_dict[k] = v
+        return res_dict
+    except Exception:
+        pass
+    return obj
+
+
 class D1KnowledgeGraph:
     """Temporal entity-relationship knowledge graph stored in Cloudflare D1."""
 
@@ -87,12 +161,19 @@ class D1KnowledgeGraph:
         else:
             raise RuntimeError("D1 statement does not support 'all' method")
 
+        raw = _to_py_dict(raw)
+
+        rows = []
         if isinstance(raw, dict):
-            return raw.get("results", [])
+            rows = raw.get("results", [])
         elif hasattr(raw, "results"):
-            return raw.results
+            rows = raw.results
         elif isinstance(raw, list):
-            return raw
+            rows = raw
+
+        rows = _to_py_dict(rows)
+        if isinstance(rows, list):
+            return [_to_py_dict(r) for r in rows]
         return []
 
     async def _first_raw(self, sql: str, params: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:

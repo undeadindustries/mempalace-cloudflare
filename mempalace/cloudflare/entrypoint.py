@@ -13,14 +13,25 @@ import os
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
-from ._shims import install_shims
-from ..backends.cloudflare_vectorize import CloudflareVectorizeCollection
-from ..cloudflare.d1_kg import D1KnowledgeGraph
-from ..cloudflare.d1_registry import D1DrawerRegistry
-from ..cloudflare.r2_storage import R2DrawerStorage
-from ..cloudflare.tools import CloudflarePalaceTools
-from ..cloudflare.workers_ai import WorkersAIEmbedder
-from ..version import __version__
+# Safe imports supporting both top-level deployment and module execution
+try:
+    from ._shims import install_shims
+    from .d1_kg import D1KnowledgeGraph
+    from .d1_registry import D1DrawerRegistry
+    from .r2_storage import R2DrawerStorage
+    from .tools import CloudflarePalaceTools
+    from .vectorize_collection import CloudflareVectorizeCollection
+    from .workers_ai import WorkersAIEmbedder
+    from ..version import __version__
+except (ImportError, ValueError):
+    from _shims import install_shims  # type: ignore
+    from d1_kg import D1KnowledgeGraph  # type: ignore
+    from d1_registry import D1DrawerRegistry  # type: ignore
+    from r2_storage import R2DrawerStorage  # type: ignore
+    from tools import CloudflarePalaceTools  # type: ignore
+    from vectorize_collection import CloudflareVectorizeCollection  # type: ignore
+    from workers_ai import WorkersAIEmbedder  # type: ignore
+    __version__ = "3.10.0"
 
 install_shims()
 
@@ -289,11 +300,94 @@ class CloudflareMemPalaceApp:
 
 app = CloudflareMemPalaceApp()
 
-# Export for Cloudflare Workers Python GA runtime
+# Export for Cloudflare Workers Python runtime
 try:
     from workers import asgi
-
     Default = asgi.entrypoint(app)
-except ImportError:
-    # Running outside Cloudflare Workers (e.g. unit tests or local development)
+except Exception:
     Default = app
+
+async def on_fetch(request, env):
+    import js
+    from pyodide.ffi import to_js
+
+    # Convert JS Request to ASGI scope
+    url_str = str(request.url)
+    from urllib.parse import urlparse
+    parsed = urlparse(url_str)
+
+    headers_list = []
+    # Inspect request headers
+    try:
+        entries = request.headers.entries()
+        for pair in entries:
+            headers_list.append((str(pair[0]).lower().encode("utf-8"), str(pair[1]).encode("utf-8")))
+    except Exception:
+        pass
+
+    scope = {
+        "type": "http",
+        "method": str(request.method).upper(),
+        "path": parsed.path or "/",
+        "raw_path": (parsed.path or "/").encode("utf-8"),
+        "query_string": (parsed.query or "").encode("utf-8"),
+        "headers": headers_list,
+        "env": env,
+    }
+
+    # Read body
+    try:
+        body_bytes = (await request.bytes()).to_py()
+    except Exception:
+        try:
+            body_text = await request.text()
+            body_bytes = body_text.encode("utf-8")
+        except Exception:
+            body_bytes = b""
+
+    body_sent = False
+
+    async def receive():
+        nonlocal body_sent
+        if not body_sent:
+            body_sent = True
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    response_status = 200
+    response_headers = []
+    response_body = []
+
+    async def send(message):
+        nonlocal response_status, response_headers, response_body
+        m_type = message.get("type")
+        if m_type == "http.response.start":
+            response_status = message.get("status", 200)
+            for k, v in message.get("headers", []):
+                response_headers.append((k.decode("latin1"), v.decode("latin1")))
+        elif m_type == "http.response.body":
+            b = message.get("body", b"")
+            if b:
+                response_body.append(b)
+
+    try:
+        await app(scope, receive, send)
+    except Exception as exc:
+        import traceback
+        # Return structured 500 JSON error
+        err_payload = json.dumps({"error": "Internal Server Error", "detail": str(exc)}).encode("utf-8")
+        err_headers = js.Headers.new()
+        err_headers.append("content-type", "application/json")
+        init = js.Object.fromEntries(to_js([["status", 500], ["headers", err_headers]]))
+        return js.Response.new(to_js(err_payload), init)
+
+    full_body = b"".join(response_body)
+    js_headers = js.Headers.new()
+    for k, v in response_headers:
+        js_headers.append(k, v)
+
+    init = js.Object.fromEntries(to_js([
+        ["status", response_status],
+        ["headers", js_headers],
+    ]))
+    return js.Response.new(to_js(full_body), init)
