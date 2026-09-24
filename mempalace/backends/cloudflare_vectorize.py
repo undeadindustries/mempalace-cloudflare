@@ -13,8 +13,7 @@ Additive-only: sits alongside upstream backends without modifying existing files
 from __future__ import annotations
 
 import asyncio
-import hashlib
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import ClassVar, List, Optional
 
 from .base import (
     BaseBackend,
@@ -26,7 +25,9 @@ from .base import (
 )
 from ..cloudflare.d1_registry import D1DrawerRegistry
 from ..cloudflare.r2_storage import R2DrawerStorage
-from ..cloudflare.vectorize_collection import CloudflareVectorizeCollection as CloudflareVectorizeCollectionBase
+from ..cloudflare.vectorize_collection import (
+    CloudflareVectorizeCollection as CloudflareVectorizeCollectionBase,
+)
 from ..cloudflare.workers_ai import WorkersAIEmbedder
 
 
@@ -39,6 +40,7 @@ def _run_async(coro):
 
     # In an existing loop (e.g. running inside Workers/ASGI), if a sync method is called:
     import concurrent.futures
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(lambda: asyncio.run(coro)).result()
 
@@ -66,7 +68,9 @@ class CloudflareVectorizeCollection(CloudflareVectorizeCollectionBase, BaseColle
         metadatas: Optional[List[dict]] = None,
         embeddings: Optional[List[List[float]]] = None,
     ) -> None:
-        _run_async(self.a_upsert(documents=documents, ids=ids, metadatas=metadatas, embeddings=embeddings))
+        _run_async(
+            self.a_upsert(documents=documents, ids=ids, metadatas=metadatas, embeddings=embeddings)
+        )
 
     def query(
         self,
@@ -182,5 +186,3 @@ try:
     register("cloudflare", CloudflareVectorizeBackend)
 except Exception:
     pass
-
-
