@@ -9,7 +9,10 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from mempalace.backends.base import PalaceRef
-from mempalace.backends.cloudflare_vectorize import CloudflareVectorizeBackend, CloudflareVectorizeCollection
+from mempalace.backends.cloudflare_vectorize import (
+    CloudflareVectorizeBackend,
+    CloudflareVectorizeCollection,
+)
 from mempalace.cloudflare.d1_kg import D1KnowledgeGraph
 from mempalace.cloudflare.d1_registry import D1DrawerRegistry
 from mempalace.cloudflare.r2_storage import R2DrawerStorage
@@ -139,7 +142,9 @@ class FakeVectorizeIndex:
         for did in ids:
             self.vectors.pop(did, None)
 
-    async def query(self, vector: List[float], topK: int = 10, filter: Optional[dict] = None, **kwargs) -> dict:
+    async def query(
+        self, vector: List[float], topK: int = 10, filter: Optional[dict] = None, **kwargs
+    ) -> dict:
         matches = []
         for vid, item in self.vectors.items():
             meta = item.get("metadata", {})
@@ -226,7 +231,9 @@ def test_d1_knowledge_graph():
         assert facts[0]["object_name"] == "Alice"
 
         # 3. Supersede fact
-        await kg.supersede("Max", "works_at", "CompanyA", "Max", "works_at", "CompanyB", boundary="2026-01-01")
+        await kg.supersede(
+            "Max", "works_at", "CompanyA", "Max", "works_at", "CompanyB", boundary="2026-01-01"
+        )
         # Verify db.batch was called with batched statements
         assert len(db.batch_calls) >= 1
         cur_facts = await kg.query_entity("Max", as_of="2026-06-01")
@@ -247,7 +254,9 @@ def test_d1_registry_and_taxonomy():
         db = FakeD1Database()
         reg = D1DrawerRegistry(db)
 
-        await reg.upsert_drawer("d1", "tech", "python", "drawers/d1.txt", "hash1", {"author": "rob"})
+        await reg.upsert_drawer(
+            "d1", "tech", "python", "drawers/d1.txt", "hash1", {"author": "rob"}
+        )
         await reg.upsert_drawer("d2", "tech", "python", "drawers/d2.txt", "hash2")
         await reg.upsert_drawer("d3", "tech", "rust", "drawers/d3.txt", "hash3")
         await reg.upsert_drawer("d4", "personal", "travel", "drawers/d4.txt", "hash4")
@@ -346,6 +355,85 @@ def test_cloudflare_vectorize_collection_full_crud():
         await col.a_delete(ids=["doc-1"])
         assert await col.a_count() == 1
         assert (await col.a_get(ids=["doc-1"])).ids == []
+
+    asyncio.run(_test())
+
+
+def test_delete_removes_vectorize_before_d1_and_r2():
+    async def _test():
+        ai = FakeWorkersAI()
+        r2 = FakeR2Bucket()
+        db = FakeD1Database()
+        vec = FakeVectorizeIndex()
+        order: List[str] = []
+
+        embedder = WorkersAIEmbedder(ai)
+        r2_storage = R2DrawerStorage(r2)
+        d1_reg = D1DrawerRegistry(db)
+        col = CloudflareVectorizeCollection(
+            vector_index=vec,
+            ai_embedder=embedder,
+            r2_storage=r2_storage,
+            d1_registry=d1_reg,
+        )
+
+        await col.a_upsert(
+            documents=["A drawer that will be deleted."],
+            ids=["doc-del"],
+            metadatas=[{"wing": "projects", "room": "cleanup"}],
+        )
+
+        original_delete_by_ids = vec.deleteByIds
+        original_d1_delete = d1_reg.delete_drawers
+        original_r2_delete = r2_storage.delete_drawers
+
+        async def record_vectorize(ids):
+            order.append("vectorize")
+            await original_delete_by_ids(ids)
+
+        async def record_d1(ids):
+            order.append("d1")
+            await original_d1_delete(ids)
+
+        async def record_r2(ids):
+            order.append("r2")
+            await original_r2_delete(ids)
+
+        vec.deleteByIds = record_vectorize
+        d1_reg.delete_drawers = record_d1
+        r2_storage.delete_drawers = record_r2
+
+        await col.a_delete(ids=["doc-del"])
+        assert order == ["vectorize", "d1", "r2"]
+
+    asyncio.run(_test())
+
+
+def test_query_drops_vectorize_hits_missing_from_d1():
+    async def _test():
+        ai = FakeWorkersAI()
+        r2 = FakeR2Bucket()
+        db = FakeD1Database()
+        vec = FakeVectorizeIndex()
+        col = CloudflareVectorizeCollection(
+            vector_index=vec,
+            ai_embedder=WorkersAIEmbedder(ai),
+            r2_storage=R2DrawerStorage(r2),
+            d1_registry=D1DrawerRegistry(db),
+        )
+
+        await col.a_upsert(
+            documents=["Ghost drawer still indexed by Vectorize."],
+            ids=["doc-ghost"],
+            metadatas=[{"wing": "projects", "room": "ghosts"}],
+        )
+        await col.d1.delete_drawers(["doc-ghost"])
+
+        q_res = await col.a_query(query_texts=["ghost drawer"], n_results=5)
+        assert "doc-ghost" not in q_res.ids[0]
+        assert q_res.documents[0] == []
+        assert q_res.metadatas[0] == []
+        assert q_res.distances[0] == []
 
     asyncio.run(_test())
 

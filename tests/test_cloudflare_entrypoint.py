@@ -209,7 +209,10 @@ def test_mcp_drawer_and_search_roundtrip():
         }
         get_res = await send_asgi_request(app, "POST", "/mcp", body=get_req, headers=headers)
         get_data = json.loads(get_res["json"]["result"]["content"][0]["text"])
-        assert get_data["content"] == "Sacred verbatim text: Cloudflare Workers GA supports Python natively."
+        assert (
+            get_data["content"]
+            == "Sacred verbatim text: Cloudflare Workers GA supports Python natively."
+        )
 
         # 3. Search
         search_req = {
@@ -225,7 +228,10 @@ def test_mcp_drawer_and_search_roundtrip():
         search_data = json.loads(search_res["json"]["result"]["content"][0]["text"])
         assert len(search_data) >= 1
         assert search_data[0]["id"] == did
-        assert search_data[0]["text"] == "Sacred verbatim text: Cloudflare Workers GA supports Python natively."
+        assert (
+            search_data[0]["text"]
+            == "Sacred verbatim text: Cloudflare Workers GA supports Python natively."
+        )
 
     asyncio.run(_test())
 
@@ -275,6 +281,7 @@ def test_mcp_kg_tools():
 def test_delete_by_source_failure_preserves_d1():
     async def _test():
         from unittest.mock import AsyncMock
+
         env = create_test_env(api_key="key")
         app = CloudflareMemPalaceApp(env=env)
         tools = app._get_tools(env)
@@ -304,6 +311,109 @@ def test_delete_by_source_failure_preserves_d1():
         assert ids_after == ["drawer-src-1"]
 
     asyncio.run(_test())
+
+
+def test_mcp_notification_has_empty_202_and_requests_still_return_json():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer key"}
+
+        note = await send_asgi_request(
+            app,
+            "POST",
+            "/mcp",
+            body={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=headers,
+        )
+        assert note["status"] == 202
+        assert note["json"] == {}
+
+        init = await send_asgi_request(
+            app,
+            "POST",
+            "/mcp",
+            body={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers=headers,
+        )
+        assert init["status"] == 200
+        assert init["json"]["result"]["serverInfo"]["name"] == "mempalace-cloudflare"
+
+    asyncio.run(_test())
+
+
+def test_mcp_kg_add_without_valid_from():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer key"}
+
+        res = await send_asgi_request(
+            app,
+            "POST",
+            "/mcp",
+            body={
+                "jsonrpc": "2.0",
+                "id": 30,
+                "method": "tools/call",
+                "params": {
+                    "name": "mempalace_kg_add",
+                    "arguments": {
+                        "subject": "Sagittarius",
+                        "predicate": "uses",
+                        "object": "MemPalace",
+                    },
+                },
+            },
+            headers=headers,
+        )
+        assert res["status"] == 200
+        data = json.loads(res["json"]["result"]["content"][0]["text"])
+        assert "error" not in data
+        assert data["triple_id"]
+        assert data["status"] == "stored"
+
+    asyncio.run(_test())
+
+
+def test_checkpoint_stores_source_file_for_delete_by_source():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        tools = app._get_tools(env)
+
+        saved = await tools.tool_checkpoint(
+            [
+                {
+                    "id": "drawer-hook-1",
+                    "wing": "projects",
+                    "room": "hooks",
+                    "content": "Hook filed this drawer verbatim.",
+                    "source_file": "sessions/cursor.jsonl",
+                }
+            ]
+        )
+        assert saved["drawer_ids"] == ["drawer-hook-1"]
+
+        found = await tools.reg.find_ids_by_source("sessions/cursor.jsonl")
+        assert found == ["drawer-hook-1"]
+
+        deleted = await tools.tool_delete_by_source("sessions/cursor.jsonl")
+        assert deleted["deleted_ids"] == ["drawer-hook-1"]
+        assert await tools.reg.find_ids_by_source("sessions/cursor.jsonl") == []
+
+    asyncio.run(_test())
+
+
+def test_coerce_body_bytes_normalizes_pyodide_shapes():
+    from mempalace.cloudflare.entrypoint import coerce_body_bytes
+
+    raw = b'{"jsonrpc":"2.0"}'
+    assert coerce_body_bytes(raw) == raw
+    assert coerce_body_bytes(bytearray(raw)) == raw
+    assert coerce_body_bytes(list(raw)) == raw
+    assert coerce_body_bytes(memoryview(raw)) == raw
+    assert coerce_body_bytes(None) == b""
 
 
 def test_tool_check_duplicate_respects_wing_scope():

@@ -9,9 +9,15 @@ Handles:
 """
 
 import json
+import logging
 import os
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
+
+logger = logging.getLogger(__name__)
+
+# JSON-RPC notifications are owed no body. Upstream MCP HTTP uses 202.
+_HTTP_ACCEPTED = 202
 
 # Safe imports supporting both top-level deployment and module execution
 try:
@@ -31,9 +37,28 @@ except (ImportError, ValueError):
     from tools import CloudflarePalaceTools  # type: ignore
     from vectorize_collection import CloudflareVectorizeCollection  # type: ignore
     from workers_ai import WorkersAIEmbedder  # type: ignore
+
     __version__ = "3.10.0"
 
 install_shims()
+
+
+def coerce_body_bytes(value: object) -> bytes:
+    """Normalize a Pyodide request body to ``bytes``.
+
+    ``JsProxy.to_py()`` on a Uint8Array can yield ``bytes``, ``bytearray``,
+    ``memoryview``, or a ``list`` of ints. The ASGI handler decodes the body
+    as UTF-8, so every shape has to become ``bytes`` first.
+    """
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    if isinstance(value, (bytearray, memoryview, list)):
+        return bytes(value)
+    return bytes(value)
 
 
 class CloudflareMemPalaceApp:
@@ -175,7 +200,9 @@ class CloudflareMemPalaceApp:
             c = body_json.get("content", "")
             src = body_json.get("source_file")
             did = body_json.get("drawer_id") or body_json.get("id")
-            res = await tools.tool_add_drawer(wing=w, room=r, content=c, source_file=src, drawer_id=did)
+            res = await tools.tool_add_drawer(
+                wing=w, room=r, content=c, source_file=src, drawer_id=did
+            )
             await self._send_json(send, 200, res)
             return
 
@@ -216,6 +243,12 @@ class CloudflareMemPalaceApp:
         tools: CloudflarePalaceTools,
     ) -> None:
         """Handle MCP JSON-RPC 2.0 requests."""
+        # A missing id means a notification. Do not dispatch and do not
+        # return a JSON-RPC body — Cursor treats a result here as a failed handshake.
+        if "id" not in body:
+            await self._send_empty(send, _HTTP_ACCEPTED)
+            return
+
         req_id = body.get("id")
         method = body.get("method")
         params = body.get("params", {})
@@ -236,11 +269,6 @@ class CloudflareMemPalaceApp:
                 },
             }
             await self._send_json(send, 200, resp)
-            return
-
-        if method == "notifications/initialized":
-            # No-op notification per MCP spec
-            await self._send_json(send, 200, {"jsonrpc": "2.0", "result": {}})
             return
 
         if method == "tools/list":
@@ -278,6 +306,17 @@ class CloudflareMemPalaceApp:
         }
         await self._send_json(send, 200, resp)
 
+    async def _send_empty(self, send: Callable, status: int) -> None:
+        """Send a response with no body. Used for JSON-RPC notifications."""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-length", b"0")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b""})
+
     async def _send_json(self, send: Callable, status: int, data: Any) -> None:
         body = json.dumps(data).encode("utf-8")
         await send(
@@ -303,9 +342,11 @@ app = CloudflareMemPalaceApp()
 # Export for Cloudflare Workers Python runtime
 try:
     from workers import asgi
+
     Default = asgi.entrypoint(app)
 except Exception:
     Default = app
+
 
 async def on_fetch(request, env):
     import js
@@ -314,6 +355,7 @@ async def on_fetch(request, env):
     # Convert JS Request to ASGI scope
     url_str = str(request.url)
     from urllib.parse import urlparse
+
     parsed = urlparse(url_str)
 
     headers_list = []
@@ -321,9 +363,11 @@ async def on_fetch(request, env):
     try:
         entries = request.headers.entries()
         for pair in entries:
-            headers_list.append((str(pair[0]).lower().encode("utf-8"), str(pair[1]).encode("utf-8")))
+            headers_list.append(
+                (str(pair[0]).lower().encode("utf-8"), str(pair[1]).encode("utf-8"))
+            )
     except Exception:
-        pass
+        logger.exception("failed to read request headers")
 
     scope = {
         "type": "http",
@@ -335,14 +379,18 @@ async def on_fetch(request, env):
         "env": env,
     }
 
-    # Read body
+    # Read body. arrayBuffer().to_bytes() is the documented Pyodide path;
+    # coerce_body_bytes covers the shapes to_py() has returned in this runtime.
     try:
-        body_bytes = (await request.bytes()).to_py()
+        body_raw = await request.arrayBuffer()
+        body_bytes = coerce_body_bytes(body_raw.to_bytes())
     except Exception:
+        logger.exception("request.arrayBuffer() failed; falling back to request.text()")
         try:
             body_text = await request.text()
-            body_bytes = body_text.encode("utf-8")
+            body_bytes = coerce_body_bytes(body_text)
         except Exception:
+            logger.exception("request.text() failed; treating body as empty")
             body_bytes = b""
 
     body_sent = False
@@ -373,9 +421,10 @@ async def on_fetch(request, env):
     try:
         await app(scope, receive, send)
     except Exception as exc:
-        import traceback
-        # Return structured 500 JSON error
-        err_payload = json.dumps({"error": "Internal Server Error", "detail": str(exc)}).encode("utf-8")
+        logger.exception("unhandled error in on_fetch")
+        err_payload = json.dumps({"error": "Internal Server Error", "detail": str(exc)}).encode(
+            "utf-8"
+        )
         err_headers = js.Headers.new()
         err_headers.append("content-type", "application/json")
         init = js.Object.fromEntries(to_js([["status", 500], ["headers", err_headers]]))
@@ -386,8 +435,12 @@ async def on_fetch(request, env):
     for k, v in response_headers:
         js_headers.append(k, v)
 
-    init = js.Object.fromEntries(to_js([
-        ["status", response_status],
-        ["headers", js_headers],
-    ]))
+    init = js.Object.fromEntries(
+        to_js(
+            [
+                ["status", response_status],
+                ["headers", js_headers],
+            ]
+        )
+    )
     return js.Response.new(to_js(full_body), init)

@@ -51,9 +51,9 @@ def make_triple_id(
     sub_id: str, predicate: str, obj_id: str, valid_from: str, recorded_at: str
 ) -> str:
     """Triple ID matching upstream ids.make_triple_id contract."""
-    key = "".join(
-        f"{len(part)}:{part}" for part in [valid_from, recorded_at]
-    ).encode()
+    # str() matches upstream ids._delimited_sha256: valid_from=None hashes
+    # as the literal "None" instead of raising TypeError.
+    key = "".join(f"{len(part)}:{part}" for part in map(str, (valid_from, recorded_at))).encode()
     hash12 = hashlib.sha256(key).hexdigest()[:12]
     return f"t_{sub_id}_{predicate}_{obj_id}_{hash12}"
 
@@ -127,6 +127,7 @@ def _to_py_dict(obj: Any) -> Any:
         return obj.__dict__
     try:
         import js
+
         entries = js.Object.entries(obj)
         res_dict = {}
         for entry in entries:
@@ -147,7 +148,9 @@ class D1KnowledgeGraph:
     def __init__(self, db_binding: Any):
         self.db = db_binding
 
-    async def _query_raw(self, sql: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+    async def _query_raw(
+        self, sql: str, params: Optional[List[Any]] = None
+    ) -> List[Dict[str, Any]]:
         """Run a query against D1 and return list of result row dicts."""
         stmt = self.db.prepare(sql)
         if params:
@@ -176,7 +179,9 @@ class D1KnowledgeGraph:
             return [_to_py_dict(r) for r in rows]
         return []
 
-    async def _first_raw(self, sql: str, params: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+    async def _first_raw(
+        self, sql: str, params: Optional[List[Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """Run a query and return first row or None."""
         rows = await self._query_raw(sql, params)
         return rows[0] if rows else None
@@ -228,7 +233,9 @@ class D1KnowledgeGraph:
     def _entity_id(self, name: str) -> str:
         return name.lower().replace(" ", "_").replace("'", "")
 
-    async def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None) -> str:
+    async def add_entity(
+        self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None
+    ) -> str:
         """Add or update an entity node."""
         eid = self._entity_id(name)
         props = json.dumps(properties or {})
@@ -397,35 +404,41 @@ class D1KnowledgeGraph:
 
         # Ensure entities exist
         props = json.dumps({})
-        batch_statements.append((
-            "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
-            [new_sub_id, new_subject, "unknown", props],
-        ))
-        batch_statements.append((
-            "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
-            [new_obj_id, new_obj, "unknown", props],
-        ))
+        batch_statements.append(
+            (
+                "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
+                [new_sub_id, new_subject, "unknown", props],
+            )
+        )
+        batch_statements.append(
+            (
+                "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
+                [new_obj_id, new_obj, "unknown", props],
+            )
+        )
 
         # Insert new triple
-        batch_statements.append((
-            """INSERT INTO triples (
+        batch_statements.append(
+            (
+                """INSERT INTO triples (
                 id, subject, predicate, object, valid_from, valid_to,
                 confidence, source_closet, source_file, source_drawer_id, adapter_name
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                triple_id,
-                new_sub_id,
-                new_pred,
-                new_obj_id,
-                bound,
-                None,
-                confidence,
-                source_closet,
-                source_file,
-                source_drawer_id,
-                adapter_name,
-            ],
-        ))
+                [
+                    triple_id,
+                    new_sub_id,
+                    new_pred,
+                    new_obj_id,
+                    bound,
+                    None,
+                    confidence,
+                    source_closet,
+                    source_file,
+                    source_drawer_id,
+                    adapter_name,
+                ],
+            )
+        )
 
         # Execute batch atomically
         await self._batch_execute(batch_statements)

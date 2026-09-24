@@ -161,7 +161,10 @@ class CloudflareVectorizeCollection:
             matches = res.matches
 
         hit_ids = [m.get("id") if isinstance(m, dict) else m.id for m in matches]
-        scores = [float(m.get("score", 0.0) if isinstance(m, dict) else getattr(m, "score", 0.0)) for m in matches]
+        scores = [
+            float(m.get("score", 0.0) if isinstance(m, dict) else getattr(m, "score", 0.0))
+            for m in matches
+        ]
 
         distances = [max(0.0, 1.0 - s) for s in scores]
 
@@ -169,14 +172,26 @@ class CloudflareVectorizeCollection:
         d1_drawers = await self.d1.get_drawers(hit_ids)
         meta_map = {d["id"]: d["metadata"] for d in d1_drawers}
 
-        out_docs = [docs_map.get(did, "") for did in hit_ids]
-        out_metas = [meta_map.get(did, {}) for did in hit_ids]
+        # Vectorize mutations are asynchronous. A deleted id can still match
+        # for a few seconds after deleteByIds. The D1 row is the source of
+        # truth for "this drawer exists", so drop hits that no longer have one.
+        kept_ids: List[str] = []
+        out_docs: List[str] = []
+        out_metas: List[dict] = []
+        kept_distances: List[float] = []
+        for did, dist in zip(hit_ids, distances):
+            if did not in meta_map:
+                continue
+            kept_ids.append(did)
+            out_docs.append(docs_map.get(did, ""))
+            out_metas.append(meta_map[did])
+            kept_distances.append(dist)
 
         return QueryResult(
-            ids=[hit_ids],
+            ids=[kept_ids],
             documents=[out_docs],
             metadatas=[out_metas],
-            distances=[distances],
+            distances=[kept_distances],
         )
 
     async def a_get(
@@ -227,7 +242,13 @@ class CloudflareVectorizeCollection:
         ids: Optional[List[str]] = None,
         where: Optional[dict] = None,
     ) -> None:
-        """Async delete: remove from Vectorize, R2, and D1."""
+        """Async delete: Vectorize, then D1, then R2.
+
+        Vectorize goes first so search stops matching the drawer. D1 goes
+        next so listing and delete-by-source stop seeing it. R2 is last: if
+        it fails, the leftover blob is unreferenced and the retry removes it.
+        Every step is idempotent.
+        """
         target_ids = ids
         if target_ids is None and where is not None:
             wing = where.get("wing")
@@ -238,13 +259,13 @@ class CloudflareVectorizeCollection:
         if not target_ids:
             return
 
-        await self.r2.delete_drawers(target_ids)
-        await self.d1.delete_drawers(target_ids)
         del_fn = getattr(self.vector_index, "deleteByIds", None)
         if del_fn is not None:
             res = del_fn(target_ids)
             if hasattr(res, "__await__"):
                 await res
+        await self.d1.delete_drawers(target_ids)
+        await self.r2.delete_drawers(target_ids)
 
     async def a_count(self) -> int:
         """Async count total drawers via D1 registry."""

@@ -26,6 +26,7 @@ def _to_py_dict(obj: Any) -> Any:
     # Try converting JsProxy directly if it has entries or properties
     try:
         import js
+
         # If it's a JS object, Object.entries returns key-value pairs
         entries = js.Object.entries(obj)
         res_dict = {}
@@ -47,7 +48,9 @@ class D1DrawerRegistry:
     def __init__(self, db_binding: Any):
         self.db = db_binding
 
-    async def _query_raw(self, sql: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+    async def _query_raw(
+        self, sql: str, params: Optional[List[Any]] = None
+    ) -> List[Dict[str, Any]]:
         stmt = self.db.prepare(sql)
         if params:
             stmt = stmt.bind(*params)
@@ -75,7 +78,9 @@ class D1DrawerRegistry:
             return [_to_py_dict(r) for r in rows]
         return []
 
-    async def _first_raw(self, sql: str, params: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+    async def _first_raw(
+        self, sql: str, params: Optional[List[Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         rows = await self._query_raw(sql, params)
         return rows[0] if rows else None
 
@@ -244,7 +249,9 @@ class D1DrawerRegistry:
             ORDER BY wing ASC, room ASC
         """
         rows = await self._query_raw(sql, params)
-        return [{"wing": r["wing"], "room": r["room"], "drawer_count": r["drawer_count"]} for r in rows]
+        return [
+            {"wing": r["wing"], "room": r["room"], "drawer_count": r["drawer_count"]} for r in rows
+        ]
 
     async def get_taxonomy(self) -> Dict[str, Dict[str, int]]:
         """Return full wing -> room -> drawer_count tree."""

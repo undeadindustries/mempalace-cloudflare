@@ -5,6 +5,7 @@ correctly interact with the Cloudflare Worker API.
 """
 
 import sys
+
 sys.path.insert(0, "./client")
 
 from mempalace.backends.base import PalaceRef
@@ -27,9 +28,7 @@ def test_client_collection_construction():
 
 
 def test_client_upsert_preserves_caller_ids(monkeypatch):
-    backend = CloudflareRemoteBackend(
-        options={"url": "http://mock-worker", "token": "test-token"}
-    )
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "test-token"})
     palace = PalaceRef(id="test-palace")
     col = backend.get_collection(palace=palace, collection_name="drawers")
 
@@ -37,7 +36,7 @@ def test_client_upsert_preserves_caller_ids(monkeypatch):
 
     def mock_request(method, path, data=None, params=None):
         captured_payloads.append((method, path, data, params))
-        return {"result": {"content": [{"text": "{\"checkpoint\": \"saved\"}"}]}}
+        return {"result": {"content": [{"text": '{"checkpoint": "saved"}'}]}}
 
     monkeypatch.setattr(col, "_request", mock_request)
 
@@ -54,12 +53,62 @@ def test_client_upsert_preserves_caller_ids(monkeypatch):
     drawers = data["params"]["arguments"]["drawers"]
     assert drawers[0]["id"] == "custom-id-1"
     assert drawers[1]["id"] == "custom-id-2"
+    assert data["jsonrpc"] == "2.0"
+    assert data["id"] is not None
+    assert data["method"] == "tools/call"
+
+
+def test_client_mcp_calls_include_jsonrpc_id(monkeypatch):
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "test-token"})
+    palace = PalaceRef(id="test-palace")
+    col = backend.get_collection(palace=palace, collection_name="drawers")
+
+    captured_payloads = []
+
+    def mock_request(method, path, data=None, params=None):
+        captured_payloads.append(data)
+        return {"result": {"content": [{"text": "[]"}]}}
+
+    monkeypatch.setattr(col, "_request", mock_request)
+
+    col.get(ids=["drawer-1"])
+    col.delete(ids=["drawer-1"])
+
+    assert len(captured_payloads) == 2
+    ids = []
+    for payload in captured_payloads:
+        assert payload["jsonrpc"] == "2.0"
+        assert payload["id"] is not None
+        assert payload["method"] == "tools/call"
+        ids.append(payload["id"])
+    assert ids[0] != ids[1]
+
+
+def test_client_upsert_forwards_source_file(monkeypatch):
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "test-token"})
+    palace = PalaceRef(id="test-palace")
+    col = backend.get_collection(palace=palace, collection_name="drawers")
+
+    captured_payloads = []
+
+    def mock_request(method, path, data=None, params=None):
+        captured_payloads.append(data)
+        return {"result": {"content": [{"text": '{"checkpoint": "saved"}'}]}}
+
+    monkeypatch.setattr(col, "_request", mock_request)
+
+    col.upsert(
+        documents=["Hook transcript line"],
+        ids=["hook-id-1"],
+        metadatas=[{"wing": "w1", "room": "r1", "source_file": "sessions/cursor.jsonl"}],
+    )
+
+    drawers = captured_payloads[0]["params"]["arguments"]["drawers"]
+    assert drawers[0]["source_file"] == "sessions/cursor.jsonl"
 
 
 def test_client_get_where_hydrates_content(monkeypatch):
-    backend = CloudflareRemoteBackend(
-        options={"url": "http://mock-worker", "token": "test-token"}
-    )
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "test-token"})
     palace = PalaceRef(id="test-palace")
     col = backend.get_collection(palace=palace, collection_name="drawers")
 

@@ -18,11 +18,10 @@ install_shims()
 
 def make_drawer_id_from_content(wing: str, room: str, content: str) -> str:
     """Drawer ID matching upstream ids.make_drawer_id_from_content contract."""
-    key = "".join(
-        f"{len(part)}:{part}" for part in [wing, room, content]
-    ).encode()
+    key = "".join(f"{len(part)}:{part}" for part in map(str, (wing, room, content))).encode()
     hash24 = hashlib.sha256(key).hexdigest()[:24]
     return f"drawer_{wing}_{room}_{hash24}"
+
 
 AAAK_SPEC = """AAAK is a compressed memory dialect that MemPalace uses for efficient storage.
 It is designed to be readable by both humans and LLMs without decoding.
@@ -99,7 +98,10 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "wing": {"type": "string", "description": "Wing to list rooms for (optional)"},
+                        "wing": {
+                            "type": "string",
+                            "description": "Wing to list rooms for (optional)",
+                        },
                     },
                 },
                 "handler": self.tool_list_rooms,
@@ -122,7 +124,10 @@ class CloudflarePalaceTools:
                         "query": {"type": "string", "description": "Search query"},
                         "wing": {"type": "string", "description": "Filter by wing (optional)"},
                         "room": {"type": "string", "description": "Filter by room (optional)"},
-                        "max_results": {"type": "integer", "description": "Max results to return (default: 5)"},
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Max results to return (default: 5)",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -133,9 +138,18 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Content to check for duplicates"},
-                        "wing": {"type": "string", "description": "Wing to check within (optional)"},
-                        "room": {"type": "string", "description": "Room to check within (optional)"},
+                        "content": {
+                            "type": "string",
+                            "description": "Content to check for duplicates",
+                        },
+                        "wing": {
+                            "type": "string",
+                            "description": "Wing to check within (optional)",
+                        },
+                        "room": {
+                            "type": "string",
+                            "description": "Room to check within (optional)",
+                        },
                     },
                     "required": ["content"],
                 },
@@ -149,8 +163,14 @@ class CloudflarePalaceTools:
                         "wing": {"type": "string", "description": "Wing (person/project/topic)"},
                         "room": {"type": "string", "description": "Room (subtopic/context)"},
                         "content": {"type": "string", "description": "Verbatim text to store"},
-                        "source_file": {"type": "string", "description": "Optional source reference"},
-                        "drawer_id": {"type": "string", "description": "Optional explicit drawer ID"},
+                        "source_file": {
+                            "type": "string",
+                            "description": "Optional source reference",
+                        },
+                        "drawer_id": {
+                            "type": "string",
+                            "description": "Optional explicit drawer ID",
+                        },
                     },
                     "required": ["wing", "room", "content"],
                 },
@@ -170,6 +190,7 @@ class CloudflarePalaceTools:
                                     "wing": {"type": "string"},
                                     "room": {"type": "string"},
                                     "content": {"type": "string"},
+                                    "source_file": {"type": "string"},
                                 },
                                 "required": ["wing", "room", "content"],
                             },
@@ -184,7 +205,10 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "drawer_id": {"type": "string", "description": "ID of the drawer to retrieve"},
+                        "drawer_id": {
+                            "type": "string",
+                            "description": "ID of the drawer to retrieve",
+                        },
                     },
                     "required": ["drawer_id"],
                 },
@@ -209,8 +233,14 @@ class CloudflarePalaceTools:
                         "wing": {"type": "string", "description": "Filter by wing (optional)"},
                         "room": {"type": "string", "description": "Filter by room (optional)"},
                         "limit": {"type": "integer", "description": "Max to return (default: 50)"},
-                        "offset": {"type": "integer", "description": "Pagination offset (default: 0)"},
-                        "include_content": {"type": "boolean", "description": "Hydrate verbatim content from R2 (default: false)"},
+                        "offset": {
+                            "type": "integer",
+                            "description": "Pagination offset (default: 0)",
+                        },
+                        "include_content": {
+                            "type": "boolean",
+                            "description": "Hydrate verbatim content from R2 (default: false)",
+                        },
                     },
                 },
                 "handler": self.tool_list_drawers,
@@ -220,7 +250,10 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "drawer_id": {"type": "string", "description": "ID of the drawer to update"},
+                        "drawer_id": {
+                            "type": "string",
+                            "description": "ID of the drawer to update",
+                        },
                         "content": {"type": "string", "description": "New verbatim content"},
                         "wing": {"type": "string", "description": "New wing (optional)"},
                         "room": {"type": "string", "description": "New room (optional)"},
@@ -234,7 +267,10 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "drawer_id": {"type": "string", "description": "ID of the drawer to delete"},
+                        "drawer_id": {
+                            "type": "string",
+                            "description": "ID of the drawer to delete",
+                        },
                     },
                     "required": ["drawer_id"],
                 },
@@ -268,7 +304,10 @@ class CloudflarePalaceTools:
                     "type": "object",
                     "properties": {
                         "content": {"type": "string", "description": "Diary entry content"},
-                        "day": {"type": "string", "description": "Day in YYYY-MM-DD format (optional)"},
+                        "day": {
+                            "type": "string",
+                            "description": "Day in YYYY-MM-DD format (optional)",
+                        },
                     },
                     "required": ["content"],
                 },
@@ -279,7 +318,10 @@ class CloudflarePalaceTools:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "limit": {"type": "integer", "description": "Number of recent days (default: 7)"},
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of recent days (default: 7)",
+                        },
                     },
                 },
                 "handler": self.tool_diary_read,
@@ -295,8 +337,14 @@ class CloudflarePalaceTools:
                     "type": "object",
                     "properties": {
                         "entity": {"type": "string", "description": "Entity to query"},
-                        "as_of": {"type": "string", "description": "Point-in-time filter (YYYY-MM-DD)"},
-                        "direction": {"type": "string", "description": "outgoing, incoming, or both (default: both)"},
+                        "as_of": {
+                            "type": "string",
+                            "description": "Point-in-time filter (YYYY-MM-DD)",
+                        },
+                        "direction": {
+                            "type": "string",
+                            "description": "outgoing, incoming, or both (default: both)",
+                        },
                     },
                     "required": ["entity"],
                 },
@@ -345,7 +393,14 @@ class CloudflarePalaceTools:
                         "new_object": {"type": "string"},
                         "boundary": {"type": "string"},
                     },
-                    "required": ["old_subject", "old_predicate", "old_object", "new_subject", "new_predicate", "new_object"],
+                    "required": [
+                        "old_subject",
+                        "old_predicate",
+                        "old_object",
+                        "new_subject",
+                        "new_predicate",
+                        "new_object",
+                    ],
                 },
                 "handler": self.tool_kg_supersede,
             },
@@ -485,6 +540,7 @@ class CloudflarePalaceTools:
                 wing=d["wing"],
                 room=d["room"],
                 content=d["content"],
+                source_file=d.get("source_file"),
                 drawer_id=d.get("id"),
             )
             stored_ids.append(res["drawer_id"])

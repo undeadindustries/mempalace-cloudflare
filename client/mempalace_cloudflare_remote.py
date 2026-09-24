@@ -31,6 +31,7 @@ class CloudflareRemoteCollection(BaseCollection):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.namespace = namespace
+        self._next_rpc_id = 1
 
     def _request(
         self,
@@ -61,7 +62,24 @@ class CloudflareRemoteCollection(BaseCollection):
             err_body = e.read().decode("utf-8")
             raise RuntimeError(f"Cloudflare Worker HTTP {e.code}: {err_body}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"Failed to connect to Cloudflare Worker at {self.base_url}: {e.reason}") from e
+            raise RuntimeError(
+                f"Failed to connect to Cloudflare Worker at {self.base_url}: {e.reason}"
+            ) from e
+
+    def _mcp_call(self, name: str, arguments: Dict[str, Any]) -> Any:
+        """POST one JSON-RPC tools/call. An id is required so the Worker executes it.
+
+        Messages without an id are notifications: the Worker answers 202 and
+        does not run the tool.
+        """
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_rpc_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+        self._next_rpc_id += 1
+        return self._request("POST", "/mcp", data=payload)
 
     def add(
         self,
@@ -90,18 +108,11 @@ class CloudflareRemoteCollection(BaseCollection):
                     "wing": meta.get("wing", "general"),
                     "room": meta.get("room", "inbox"),
                     "content": doc,
+                    "source_file": meta.get("source_file"),
                 }
             )
 
-        # Batch checkpoint
-        payload = {
-            "method": "tools/call",
-            "params": {
-                "name": "mempalace_checkpoint",
-                "arguments": {"drawers": drawers},
-            },
-        }
-        self._request("POST", "/mcp", data=payload)
+        self._mcp_call("mempalace_checkpoint", {"drawers": drawers})
 
     def query(
         self,
@@ -155,14 +166,7 @@ class CloudflareRemoteCollection(BaseCollection):
         include: Optional[List[str]] = None,
     ) -> GetResult:
         if ids:
-            payload = {
-                "method": "tools/call",
-                "params": {
-                    "name": "mempalace_get_drawers",
-                    "arguments": {"drawer_ids": ids},
-                },
-            }
-            res = self._request("POST", "/mcp", data=payload)
+            res = self._mcp_call("mempalace_get_drawers", {"drawer_ids": ids})
             content_str = res.get("result", {}).get("content", [{}])[0].get("text", "[]")
             items = json.loads(content_str)
             out_ids = [it["drawer_id"] for it in items]
@@ -196,14 +200,7 @@ class CloudflareRemoteCollection(BaseCollection):
         where: Optional[dict] = None,
     ) -> None:
         if ids:
-            payload = {
-                "method": "tools/call",
-                "params": {
-                    "name": "mempalace_delete_drawers",
-                    "arguments": {"drawer_ids": ids},
-                },
-            }
-            self._request("POST", "/mcp", data=payload)
+            self._mcp_call("mempalace_delete_drawers", {"drawer_ids": ids})
 
     def count(self) -> int:
         res = self._request("GET", "/api/status")
@@ -239,9 +236,7 @@ class CloudflareRemoteBackend(BaseBackend):
         opts = {**self.options, **(options or {})}
 
         url = (
-            opts.get("url")
-            or os.environ.get("MEMPALACE_CLOUDFLARE_URL")
-            or "http://localhost:8787"
+            opts.get("url") or os.environ.get("MEMPALACE_CLOUDFLARE_URL") or "http://localhost:8787"
         )
         token = (
             opts.get("token")
