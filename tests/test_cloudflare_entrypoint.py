@@ -342,6 +342,44 @@ def test_mcp_notification_has_empty_202_and_requests_still_return_json():
     asyncio.run(_test())
 
 
+def test_mcp_get_and_delete_return_405_with_allow_post():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer key", b"accept": b"text/event-stream"}
+
+        for method in ("GET", "DELETE"):
+            res = await send_asgi_request(app, method, "/mcp", headers=headers)
+            assert res["status"] == 405, method
+            assert res["headers"][b"allow"] == b"POST", method
+
+        unauthenticated = await send_asgi_request(app, "GET", "/mcp")
+        assert unauthenticated["status"] == 401
+
+    asyncio.run(_test())
+
+
+def test_mcp_initialize_negotiates_protocol_version():
+    async def _test():
+        env = create_test_env(api_key="key")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer key"}
+
+        async def negotiated(params):
+            body = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+            if params is not None:
+                body["params"] = params
+            res = await send_asgi_request(app, "POST", "/mcp", body=body, headers=headers)
+            return res["json"]["result"]["protocolVersion"]
+
+        for version in ("2024-11-05", "2025-03-26", "2025-06-18"):
+            assert await negotiated({"protocolVersion": version}) == version
+        assert await negotiated({"protocolVersion": "1999-01-01"}) == "2025-06-18"
+        assert await negotiated(None) == "2025-06-18"
+
+    asyncio.run(_test())
+
+
 def test_mcp_kg_add_without_valid_from():
     async def _test():
         env = create_test_env(api_key="key")

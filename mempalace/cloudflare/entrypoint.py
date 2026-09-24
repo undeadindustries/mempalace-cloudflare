@@ -18,6 +18,30 @@ logger = logging.getLogger(__name__)
 
 # JSON-RPC notifications are owed no body. Upstream MCP HTTP uses 202.
 _HTTP_ACCEPTED = 202
+_HTTP_METHOD_NOT_ALLOWED = 405
+
+_MCP_PATH = "/mcp"
+# Streamable HTTP: a server with no SSE stream MUST answer GET with 405, and
+# MAY answer session-terminating DELETE with 405. Only POST carries messages.
+_MCP_ALLOWED_METHOD = "POST"
+
+# Newest first. The Worker only serves tools with JSON responses, which every
+# version listed here supports unchanged.
+_SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+
+def negotiate_protocol_version(requested: object) -> str:
+    """Pick the MCP protocol version to answer ``initialize`` with.
+
+    The spec requires echoing the client's version when the server supports
+    it, and otherwise offering the newest one the server does support. Clients
+    such as Cursor may drop the connection if the server answers with an older
+    version than they asked for.
+    """
+    if requested in _SUPPORTED_PROTOCOL_VERSIONS:
+        return requested  # type: ignore[return-value]
+    return _SUPPORTED_PROTOCOL_VERSIONS[0]
+
 
 # Safe imports supporting both top-level deployment and module execution
 try:
@@ -151,6 +175,10 @@ class CloudflareMemPalaceApp:
             )
             return
 
+        if path == _MCP_PATH and method != _MCP_ALLOWED_METHOD:
+            await self._send_method_not_allowed(send, _MCP_ALLOWED_METHOD)
+            return
+
         # 3. Read request body
         body = b""
         more_body = True
@@ -170,7 +198,7 @@ class CloudflareMemPalaceApp:
         # 4. Route Dispatch
         tools = self._get_tools(env)
 
-        if path == "/mcp" and method == "POST":
+        if path == _MCP_PATH:
             await self._handle_mcp(send, body_json, tools)
             return
 
@@ -258,7 +286,9 @@ class CloudflareMemPalaceApp:
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": negotiate_protocol_version(
+                        params.get("protocolVersion") if isinstance(params, dict) else None
+                    ),
                     "serverInfo": {
                         "name": "mempalace-cloudflare",
                         "version": __version__,
@@ -316,6 +346,22 @@ class CloudflareMemPalaceApp:
             }
         )
         await send({"type": "http.response.body", "body": b""})
+
+    async def _send_method_not_allowed(self, send: Callable, allowed: str) -> None:
+        """Send 405 with the ``Allow`` header RFC 9110 requires on that status."""
+        body = json.dumps({"error": f"Method not allowed. Use {allowed}."}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": _HTTP_METHOD_NOT_ALLOWED,
+                "headers": [
+                    (b"allow", allowed.encode("ascii")),
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
     async def _send_json(self, send: Callable, status: int, data: Any) -> None:
         body = json.dumps(data).encode("utf-8")
