@@ -6,6 +6,11 @@ Supports async execution and batching for embedding documents and queries.
 
 from typing import Any, List
 
+try:
+    from .jsutil import as_js
+except (ImportError, ValueError):
+    from jsutil import as_js  # type: ignore
+
 
 DEFAULT_EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5"
 EMBEDDING_DIMENSION = 384
@@ -54,7 +59,7 @@ class WorkersAIEmbedder:
         if run_fn is None:
             raise RuntimeError("Workers AI binding does not have a 'run' method")
 
-        res = run_fn(self.model, payload)
+        res = run_fn(self.model, as_js(payload))
         if hasattr(res, "__await__"):
             res = await res
 

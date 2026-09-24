@@ -10,36 +10,37 @@ from typing import Any, Dict, List, Optional
 
 
 def _to_py_dict(obj: Any) -> Any:
-    """Convert JsProxy object or dict to Python native types."""
-    if obj is None:
-        return None
+    """Convert a JsProxy, D1 result, or dict into plain Python values.
+
+    D1's ``all()`` result is a JS object. ``Object.entries`` on its ``results``
+    array yields a dict with numeric keys, which the caller would drop. Arrays
+    are turned into lists before that happens.
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
     if hasattr(obj, "to_py"):
         try:
-            return obj.to_py()
+            converted = obj.to_py()
         except Exception:
-            pass
+            converted = None
+        if converted is not None and converted is not obj:
+            return _to_py_dict(converted)
     if isinstance(obj, dict):
-        return obj
-    # Check if obj is a JS object that can be converted via dict or dir/getattr
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    # Try converting JsProxy directly if it has entries or properties
+        return {key: _to_py_dict(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_py_dict(value) for value in obj]
+    length = getattr(obj, "length", None)
+    if isinstance(length, int) and not isinstance(obj, (str, bytes)):
+        return [_to_py_dict(obj[index]) for index in range(length)]
     try:
         import js
 
-        # If it's a JS object, Object.entries returns key-value pairs
         entries = js.Object.entries(obj)
-        res_dict = {}
-        for entry in entries:
-            k = entry[0]
-            v = entry[1]
-            if hasattr(v, "to_py"):
-                v = v.to_py()
-            res_dict[k] = v
-        return res_dict
+        if hasattr(entries, "to_py"):
+            entries = entries.to_py()
+        return {str(entry[0]): _to_py_dict(entry[1]) for entry in entries}
     except Exception:
-        pass
-    return obj
+        return obj
 
 
 class D1DrawerRegistry:
@@ -74,8 +75,10 @@ class D1DrawerRegistry:
             rows = raw
 
         rows = _to_py_dict(rows)
+        if isinstance(rows, dict) and rows and all(str(key).isdigit() for key in rows):
+            rows = [rows[key] for key in sorted(rows, key=lambda key: int(key))]
         if isinstance(rows, list):
-            return [_to_py_dict(r) for r in rows]
+            return [_to_py_dict(row) for row in rows]
         return []
 
     async def _first_raw(

@@ -17,6 +17,10 @@ from mempalace.cloudflare.d1_kg import D1KnowledgeGraph
 from mempalace.cloudflare.d1_registry import D1DrawerRegistry
 from mempalace.cloudflare.r2_storage import R2DrawerStorage
 from mempalace.cloudflare.search import execute_hybrid_search
+from mempalace.cloudflare.vectorize_collection import (
+    CloudflareVectorizeCollection as VectorizeCollection,
+    vectorize_id,
+)
 from mempalace.cloudflare.workers_ai import EMBEDDING_DIMENSION, WorkersAIEmbedder
 
 
@@ -173,6 +177,37 @@ class FakeVectorizeIndex:
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────
+
+
+def test_long_drawer_id_round_trips_through_vectorize_hash():
+    async def _test():
+        long_id = "diary_clinic-report-ingestion_20260814_163701084038_2cea76042ec1_chunk_000000"
+        assert len(long_id) > 64
+        assert len(vectorize_id(long_id)) == 64
+
+        col = VectorizeCollection(
+            vector_index=FakeVectorizeIndex(),
+            ai_embedder=WorkersAIEmbedder(FakeWorkersAI()),
+            r2_storage=R2DrawerStorage(FakeR2Bucket()),
+            d1_registry=D1DrawerRegistry(FakeD1Database()),
+        )
+        await col.a_upsert(
+            documents=["verbatim chunk"],
+            ids=[long_id],
+            metadatas=[{"wing": "clinic", "room": "diary"}],
+        )
+        assert long_id not in col.vector_index.vectors
+        assert vectorize_id(long_id) in col.vector_index.vectors
+
+        found = await col.a_query(query_texts=["verbatim chunk"], n_results=1)
+        assert found.ids[0] == [long_id]
+        assert found.documents[0] == ["verbatim chunk"]
+
+        await col.a_delete(ids=[long_id])
+        assert col.vector_index.vectors == {}
+        assert (await col.a_get(ids=[long_id])).ids == []
+
+    asyncio.run(_test())
 
 
 def test_workers_ai_embedder():

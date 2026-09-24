@@ -96,6 +96,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 10. **The harness owns its config file.** Docs say what goes in the MCP client's config (`mcp.json` headers as plain values; `${env:NAME}` shown only as an alternative). Protecting that file is the harness's job; the fork does not check file permissions or require environment variables for MCP clients. Keyed entries belong in user-level config, never in a project's `.cursor/mcp.json`.
 11. **R2 bucket lock rejected.** A bucket lock prevents deleting and overwriting objects within retention periods, directly conflicting with verbatim drawer operations `mempalace_delete_drawer` and `mempalace_update_drawer`. Backups remain optional (via D1 Time Travel and manual exports).
 12. **In-Worker Access JWT verification dropped.** Access checks every request at Cloudflare's edge on all hostnames. Preview URLs are disabled, and Worker Bearer token validation provides defence in depth. Validating RS256 JWT signatures inside the Worker Python runtime would require manual WebCrypto JWKS fetching on cold starts without significant security benefit.
+13. **Local bge-small import.** `POST /api/drawers/batch` accepts up to 100 drawers with precomputed 384-dim embeddings so a palace import does not spend Workers AI neurons. `scripts/import_local_palace.py` reads the local Chroma palace and embeds with ONNX `Xenova/bge-small-en-v1.5`. Vectorize and Workers AI bindings must receive `pyodide.ffi.to_js` values (`jsutil.as_js`). Vectorize ids longer than 64 bytes are sha256 keys; the original id is stored on the vector metadata and in D1.
 
 ## Current Project Status
 
@@ -123,7 +124,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 
 ## Open TODOs
 
-- [ ] Import local palace drawers (~55k drawers, ~580 MB ChromaDB + SQLite KG + diaries) to `mempalace-cloudflare`.
+- [ ] Import the rest of the local palace after the 10-drawer dry run (offset 10 in `~/.mempalace/cloudflare-import-progress.json`). Resume with `scripts/import_local_palace.py --resume`. Closets (`mempalace_closets`, ~1.8k) are not part of this import. 34,232 drawer ids exceed Vectorize's 64-byte id limit; those use a sha256 vector key while D1 and R2 keep the original id.
 
 ## Future Roadmap (v2 / Post-v1)
 

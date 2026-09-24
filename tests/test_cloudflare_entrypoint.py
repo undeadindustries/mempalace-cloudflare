@@ -557,3 +557,78 @@ def test_api_drawers_limit_validation_and_clamping():
         assert "drawers" in res["json"]
 
     asyncio.run(_test())
+
+
+def test_batch_drawers_uses_client_embeddings_and_keeps_metadata():
+    async def _test():
+        env = create_test_env(api_key="secret")
+        app = CloudflareMemPalaceApp(env=env)
+        calls = {"n": 0}
+        original = env.AI.run
+
+        async def counting_run(model, payload):
+            calls["n"] += 1
+            return await original(model, payload)
+
+        env.AI.run = counting_run
+        vector = [0.0] * 384
+        vector[0] = 1.0
+        res = await send_asgi_request(
+            app,
+            "POST",
+            "/api/drawers/batch",
+            body={
+                "drawers": [
+                    {
+                        "id": "drawer-import-1",
+                        "wing": "humanizer",
+                        "room": "general",
+                        "content": "exact local words",
+                        "source_file": "/tmp/note.md",
+                        "metadata": {"filed_at": "2026-05-20T11:48:05", "chunk_index": 0},
+                        "embedding": vector,
+                    }
+                ]
+            },
+            headers={b"authorization": b"Bearer secret"},
+        )
+        assert res["status"] == 200
+        assert res["json"]["embedded_by"] == "client"
+        assert calls["n"] == 0
+        stored = env.VECTOR_INDEX.vectors["drawer-import-1"]
+        assert stored["values"][0] == 1.0
+        got = await app._get_tools(env).tool_get_drawer("drawer-import-1")
+        assert got["content"] == "exact local words"
+        assert got["metadata"]["source_file"] == "/tmp/note.md"
+        assert got["metadata"]["filed_at"] == "2026-05-20T11:48:05"
+
+    asyncio.run(_test())
+
+
+def test_batch_drawers_rejects_bad_shape():
+    async def _test():
+        env = create_test_env(api_key="secret")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer secret"}
+        res = await send_asgi_request(
+            app,
+            "POST",
+            "/api/drawers/batch",
+            body={"drawers": [{"content": "", "embedding": [0.0] * 384}]},
+            headers=headers,
+        )
+        assert res["status"] == 400
+        res = await send_asgi_request(
+            app,
+            "POST",
+            "/api/drawers/batch",
+            body={"drawers": [{"content": "x", "embedding": [1.0]}]},
+            headers=headers,
+        )
+        assert res["status"] == 400
+        assert await app._get_tools(env).tool_status()
+        assert env.DB  # batch must not have written
+        count = await app._get_tools(env).col.a_count()
+        assert count == 0
+
+    asyncio.run(_test())

@@ -11,11 +11,43 @@ try:
     from .r2_storage import R2DrawerStorage
     from .results import GetResult, QueryResult
     from .workers_ai import WorkersAIEmbedder
+    from .jsutil import as_js
 except (ImportError, ValueError):
     from d1_registry import D1DrawerRegistry  # type: ignore
     from r2_storage import R2DrawerStorage  # type: ignore
     from results import GetResult, QueryResult  # type: ignore
     from workers_ai import WorkersAIEmbedder  # type: ignore
+    from jsutil import as_js  # type: ignore
+
+# Vectorize rejects ids longer than 64 bytes. Longer palace ids stay intact in
+# D1 and R2; only the vector key is a stable hash, with the real id in metadata.
+MAX_VECTOR_ID_BYTES = 64
+
+
+def vectorize_id(drawer_id: str) -> str:
+    """Return a Vectorize id that is at most 64 bytes, stable for ``drawer_id``."""
+    if len(drawer_id.encode("utf-8")) <= MAX_VECTOR_ID_BYTES:
+        return drawer_id
+    return hashlib.sha256(drawer_id.encode("utf-8")).hexdigest()
+
+
+def _match_drawer_id(match: Any) -> str:
+    """Resolve the palace drawer id from a Vectorize match.
+
+    Short ids are stored as the vector id. Ids over 64 bytes are hashed, and
+    the original id rides in metadata so search still hydrates the D1/R2 row.
+    """
+    if isinstance(match, dict):
+        meta = match.get("metadata") or {}
+        original = meta.get("drawer_id")
+        if original:
+            return str(original)
+        return str(match.get("id", ""))
+    meta = getattr(match, "metadata", None) or {}
+    original = meta.get("drawer_id") if isinstance(meta, dict) else None
+    if original:
+        return str(original)
+    return str(getattr(match, "id", ""))
 
 
 class CloudflareVectorizeCollection:
@@ -91,9 +123,12 @@ class CloudflareVectorizeCollection:
                 vmeta["room"] = str(meta["room"])[:64]
             if "source_file" in meta and meta["source_file"]:
                 vmeta["source_file"] = str(meta["source_file"])[:64]
+            vid = vectorize_id(did)
+            if vid != did:
+                vmeta["drawer_id"] = did
 
             v_item = {
-                "id": did,
+                "id": vid,
                 "values": vec,
                 "metadata": vmeta,
             }
@@ -107,7 +142,7 @@ class CloudflareVectorizeCollection:
 
         for i in range(0, len(vectorize_vectors), 500):
             batch = vectorize_vectors[i : i + 500]
-            res = upsert_fn(batch)
+            res = upsert_fn(as_js(batch))
             if hasattr(res, "__await__"):
                 await res
 
@@ -142,9 +177,9 @@ class CloudflareVectorizeCollection:
         if self.namespace:
             kwargs["namespace"] = self.namespace
         if cf_filter:
-            kwargs["filter"] = cf_filter
+            kwargs["filter"] = as_js(cf_filter)
 
-        res = query_fn(q_vec, **kwargs)
+        res = query_fn(as_js(q_vec), **kwargs)
         if hasattr(res, "__await__"):
             res = await res
 
@@ -160,7 +195,7 @@ class CloudflareVectorizeCollection:
         elif hasattr(res, "matches"):
             matches = res.matches
 
-        hit_ids = [m.get("id") if isinstance(m, dict) else m.id for m in matches]
+        hit_ids = [_match_drawer_id(m) for m in matches]
         scores = [
             float(m.get("score", 0.0) if isinstance(m, dict) else getattr(m, "score", 0.0))
             for m in matches
@@ -261,7 +296,7 @@ class CloudflareVectorizeCollection:
 
         del_fn = getattr(self.vector_index, "deleteByIds", None)
         if del_fn is not None:
-            res = del_fn(target_ids)
+            res = del_fn(as_js([vectorize_id(did) for did in target_ids]))
             if hasattr(res, "__await__"):
                 await res
         await self.d1.delete_drawers(target_ids)

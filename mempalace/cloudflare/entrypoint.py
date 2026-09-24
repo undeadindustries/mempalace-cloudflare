@@ -235,6 +235,13 @@ class CloudflareMemPalaceApp:
             await self._send_json(send, 200, {"results": res})
             return
 
+        if path == "/api/drawers/batch" and method == "POST":
+            drawers = body_json.get("drawers")
+            res = await tools.tool_add_drawers(drawers)
+            status_code = 400 if "error" in res else 200
+            await self._send_json(send, status_code, res)
+            return
+
         if path == "/api/drawers" and method == "POST":
             w = body_json.get("wing", "general")
             r = body_json.get("room", "inbox")

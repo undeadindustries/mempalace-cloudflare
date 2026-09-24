@@ -6,7 +6,8 @@ tools over the Model Context Protocol (MCP) Streamable HTTP transport.
 
 from datetime import datetime
 import hashlib
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
     from ._shims import install_shims
@@ -43,6 +44,86 @@ Read AAAK naturally — expand codes mentally, treat *markers* as emotional cont
 When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
 MAX_PAGE_LIMIT = 100
+MAX_BATCH_DRAWERS = 100
+
+try:
+    from .workers_ai import EMBEDDING_DIMENSION
+except (ImportError, ValueError):
+    from workers_ai import EMBEDDING_DIMENSION  # type: ignore
+
+
+def prepare_drawer_batch(
+    drawers: object,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Validate a batch before any R2, D1, or Vectorize write.
+
+    Returns the normalized rows and an error message. An error means nothing
+    was safe to store.
+    """
+    if not isinstance(drawers, list) or not drawers:
+        return [], "drawers must be a non-empty list"
+    if len(drawers) > MAX_BATCH_DRAWERS:
+        return [], f"drawers exceeds {MAX_BATCH_DRAWERS}"
+
+    prepared: List[Dict[str, Any]] = []
+    saw_embedding = False
+    saw_missing = False
+    for index, item in enumerate(drawers):
+        if not isinstance(item, dict):
+            return [], f"drawers[{index}] must be an object"
+        content = item.get("content")
+        if not isinstance(content, str) or content == "":
+            return [], f"drawers[{index}].content must be a non-empty string"
+        wing = str(item.get("wing") or "general")
+        room = str(item.get("room") or "inbox")
+        drawer_id = item.get("drawer_id") or item.get("id")
+        if drawer_id is not None and not isinstance(drawer_id, str):
+            return [], f"drawers[{index}].id must be a string"
+        did = drawer_id or make_drawer_id_from_content(wing, room, content)
+        meta_in = item.get("metadata") or {}
+        if not isinstance(meta_in, dict):
+            return [], f"drawers[{index}].metadata must be an object"
+        meta = dict(meta_in)
+        meta.pop("embedding", None)
+        meta["wing"] = wing
+        meta["room"] = room
+        source = item.get("source_file", meta.get("source_file"))
+        if isinstance(source, str) and source:
+            meta["source_file"] = source
+        if "authored_at" not in meta:
+            meta["authored_at"] = datetime.now().isoformat()
+
+        embedding = item.get("embedding")
+        parsed: Optional[List[float]]
+        if embedding is None:
+            saw_missing = True
+            parsed = None
+        else:
+            parsed_or_error = _parse_embedding(embedding)
+            if isinstance(parsed_or_error, str):
+                return [], f"drawers[{index}].embedding {parsed_or_error}"
+            parsed = parsed_or_error
+            saw_embedding = True
+        prepared.append({"id": did, "content": content, "metadata": meta, "embedding": parsed})
+
+    if saw_embedding and saw_missing:
+        return [], "either every drawer has an embedding, or none do"
+    return prepared, None
+
+
+def _parse_embedding(value: object) -> Union[List[float], str]:
+    """Return a 384-float vector, or an error phrase."""
+    if not isinstance(value, list) or len(value) != EMBEDDING_DIMENSION:
+        return f"must be {EMBEDDING_DIMENSION} floats"
+    out: List[float] = []
+    for number in value:
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            return f"must be {EMBEDDING_DIMENSION} floats"
+        as_float = float(number)
+        if not math.isfinite(as_float):
+            return "must be finite"
+        out.append(as_float)
+    return out
 
 
 class CloudflarePalaceTools:
@@ -536,6 +617,32 @@ class CloudflarePalaceTools:
             metadatas=[meta],
         )
         return {"drawer_id": did, "wing": wing, "room": room, "status": "stored"}
+
+    async def tool_add_drawers(self, drawers: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Store a batch of drawers in one upsert.
+
+        Precomputed ``embedding`` vectors skip Workers AI. That is how a local
+        palace can be imported without spending the free-tier neuron quota.
+        """
+        prepared, error = prepare_drawer_batch(drawers)
+        if error:
+            return {"error": error}
+
+        documents = [item["content"] for item in prepared]
+        ids = [item["id"] for item in prepared]
+        metadatas = [item["metadata"] for item in prepared]
+        embeddings = [item["embedding"] for item in prepared] if prepared[0]["embedding"] else None
+        await self.col.a_upsert(
+            documents=documents,
+            ids=ids,
+            metadatas=metadatas,
+            embeddings=embeddings,
+        )
+        return {
+            "stored": len(ids),
+            "drawer_ids": ids,
+            "embedded_by": "client" if embeddings is not None else "workers_ai",
+        }
 
     async def tool_checkpoint(self, drawers: List[Dict[str, str]]) -> Dict[str, Any]:
         stored_ids = []
