@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -32,8 +33,11 @@ from client.mempalace_cloudflare_remote import (  # noqa: E402
 logger = logging.getLogger("import_local_palace")
 
 READ_PAGE = 100
-UPLOAD_BATCH = 50
+DEFAULT_UPLOAD_BATCH = 20
 HTTP_TIMEOUT_SECONDS = 120
+MAX_ATTEMPTS = 6
+BACKOFF_SECONDS = 2
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 DEFAULT_PROGRESS = Path(os.path.expanduser("~/.mempalace/cloudflare-import-progress.json"))
 
 
@@ -88,16 +92,33 @@ def _worker_settings() -> tuple[str, dict[str, str]]:
 def _post_batch(
     base: str, headers: dict[str, str], drawers: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    """POST one batch, retrying transient failures.
+
+    Upserts are idempotent, so resending a batch that half-landed is safe.
+    Error 1102 (Worker CPU limit) and 429/5xx are retried with backoff; any
+    other status stops the run so progress is not advanced past it.
+    """
     body = json.dumps({"drawers": drawers}).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base}/api/drawers/batch", data=body, headers=headers, method="POST"
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"batch upload HTTP {exc.code}: {detail}") from exc
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        request = urllib.request.Request(
+            f"{base}/api/drawers/batch", data=body, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code not in RETRYABLE_STATUS or attempt == MAX_ATTEMPTS:
+                raise RuntimeError(f"batch upload HTTP {exc.code}: {detail}") from exc
+            logger.warning(
+                "HTTP %s (%s), retry %s/%s", exc.code, detail[:80], attempt, MAX_ATTEMPTS
+            )
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == MAX_ATTEMPTS:
+                raise RuntimeError(f"batch upload failed: {exc}") from exc
+            logger.warning("network error %s, retry %s/%s", exc, attempt, MAX_ATTEMPTS)
+        time.sleep(BACKOFF_SECONDS * 2 ** (attempt - 1))
+    raise AssertionError("unreachable")
 
 
 def _row(
@@ -121,6 +142,7 @@ def import_drawers(
     limit: int | None,
     progress_path: Path,
     resume: bool,
+    upload_batch: int = DEFAULT_UPLOAD_BATCH,
 ) -> dict[str, Any]:
     """Embed and upload drawers. Returns the progress object."""
     base, headers = _worker_settings()
@@ -141,8 +163,8 @@ def import_drawers(
             _row(did, doc, meta, vec)
             for did, doc, meta, vec in zip(ids, batch["documents"], batch["metadatas"], vectors)
         ]
-        for start in range(0, len(drawers), UPLOAD_BATCH):
-            chunk = drawers[start : start + UPLOAD_BATCH]
+        for start in range(0, len(drawers), upload_batch):
+            chunk = drawers[start : start + upload_batch]
             result = _post_batch(base, headers, chunk)
             if result.get("embedded_by") != "client":
                 raise RuntimeError(f"worker embedded the batch itself: {result}")
@@ -163,14 +185,23 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--progress", type=Path, default=DEFAULT_PROGRESS)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=DEFAULT_UPLOAD_BATCH,
+        help="drawers per request; the free plan's 10 ms CPU limit needs small batches",
+    )
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be >= 1")
+    if not 1 <= args.batch <= 100:
+        raise SystemExit("--batch must be between 1 and 100")
     result = import_drawers(
         palace_path=args.palace,
         limit=args.limit,
         progress_path=args.progress,
         resume=args.resume,
+        upload_batch=args.batch,
     )
     logger.info("done %s", result)
 
