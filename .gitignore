@@ -48,7 +48,6 @@ target/
 *.exe
 
 # BEGIN mempalace-cloudflare fork: per-account Cloudflare config, never commit
-AGENTS.local.md
 wrangler.toml
 .dev.vars*
 .wrangler/

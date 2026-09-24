@@ -210,7 +210,7 @@ The fork is additive. All Cloudflare code is in new files, and no upstream engin
 Three upstream files differ in the fork:
 
 - `README.md`: this block, kept at the top so that merge conflicts, if any, stay in one place.
-- `.gitignore`: a marked block that ignores `wrangler.toml`, `.dev.vars*`, `.wrangler/`, and `AGENTS.local.md`, and un-ignores `.env.example`.
+- `.gitignore`: a marked block that ignores `wrangler.toml`, `.dev.vars*`, and `.wrangler/`, and un-ignores `.env.example`.
 - `AGENTS.md`: upstream has a symlink to `CLAUDE.md` here. The fork replaces it with its own agent orientation file.
 
 The fork lives on `main`, which is this repository's default branch. `develop` mirrors upstream and has no Cloudflare code. To pull upstream changes into the fork:

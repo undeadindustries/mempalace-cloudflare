@@ -2,7 +2,7 @@
 
 Read this file first in every session. A fresh agent must be able to continue work without asking orientation questions.
 
-If `AGENTS.local.md` exists, read it next. It is gitignored and holds machine- and account-specific notes (live Worker URL, local paths, pending credential work). Never copy its contents into tracked files: this repository is public.
+This repository is public. The live Worker URL is printed by `npx wrangler deploy` and listed by `npx wrangler deployments list`; do not write it, or any other account-specific value, into tracked files.
 
 `CLAUDE.md` is upstream's orientation file. Treat it as read-only so upstream merges stay clean.
 
@@ -18,7 +18,7 @@ Act as a senior Python engineer with decades of deep experience in CPython, pack
 4. **Auth on every route.** Every route except `/healthz` validates `Authorization: Bearer <token>` against `env.MEMPALACE_API_KEY` (Cloudflare secret). Missing or invalid token → `401`. Unset secret → `503`.
 5. **Research-first.** Verify Cloudflare Python Workers APIs, binding names, and runtime limits against current official docs before writing code. Tag claims [Certain] / [Likely] / [Guessing].
 6. **Model the unhappy path.** Partial failures across Vectorize/D1/R2 are the norm, not the exception. Design for retryable, idempotent operations.
-7. **No secrets or account identifiers in git.** API keys live in `wrangler secret`. `wrangler.toml`, `.env`, `.dev.vars*` and `AGENTS.local.md` are gitignored. Do not commit the Worker hostname, D1 ids, account ids, or local paths.
+7. **No secrets or account identifiers in git.** API keys live in `wrangler secret`. `wrangler.toml`, `.env` and `.dev.vars*` are gitignored. Do not commit the Worker hostname, D1 ids, account ids, or local paths.
 8. **Concise.** No filler, no preamble. Conventional commits (`fix:`, `feat:`, `docs:`, `ci:`). Never hard-reset.
 
 ## Project Overview
@@ -49,7 +49,6 @@ MemPalace is a verbatim memory system for AI — not a search engine or RAG wrap
 
 ```
 AGENTS.md                      # This file (tracked)
-AGENTS.local.md                # Machine/account notes (gitignored)
 wrangler.toml.example          # Worker config template; wrangler.toml is generated and gitignored
 .env.example                   # Wrangler credential template; .env is gitignored
 migrations/0001_kg.sql         # D1 knowledge graph tables
@@ -90,7 +89,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 3. **ASGI entrypoint with Bearer middleware.** Auth runs before routing, so no route can ship unauthenticated by omission. MCP is Streamable HTTP on `POST /mcp` with JSON responses only: `GET`/`DELETE /mcp` return `405` with `Allow: POST`, notifications return `202` with no body, and `initialize` echoes the client's protocol version when supported (2025-06-18, 2025-03-26, 2024-11-05).
 4. **Upstream files the fork edits, each in a marked block.** `README.md` (fork docs between `<!-- BEGIN mempalace-cloudflare fork section -->` and `<!-- END ... -->`; on conflict keep the block, take upstream below it) and `.gitignore` (`# BEGIN/END mempalace-cloudflare fork`; on conflict keep both). `AGENTS.md` replaces upstream's `AGENTS.md` → `CLAUDE.md` symlink with this real file; if upstream ever changes that symlink, resolve the conflict by keeping this file.
 5. **Per-account config is never committed.** `wrangler.toml` and `.env` are gitignored; only `.example` templates are tracked. The bootstrap generates `wrangler.toml` by replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`. Resource names are duplicated as constants at the top of the bootstrap script and must match the template.
-6. **AGENTS.md is tracked.** Reversed from an earlier local-only decision: AGENTS.md is the cross-tool standard (Linux Foundation Agentic AI Foundation; read by Cursor, Codex, Copilot, Gemini CLI), and the maintainers work across many machines. Account-specific details go in the gitignored `AGENTS.local.md`.
+6. **AGENTS.md is tracked.** Reversed from an earlier local-only decision: AGENTS.md is the cross-tool standard (Linux Foundation Agentic AI Foundation; read by Cursor, Codex, Copilot, Gemini CLI), and the maintainers work across many machines. Account-specific values stay out of it (see principle 7).
 7. **Copied helpers.** Cloudflare Python Workers bundle only `mempalace/cloudflare/`, so the Worker cannot import the upstream engine at runtime. ID hashing, ISO date validation and search ranking are copied. After each upstream merge, check the diff of `mempalace/ids.py`, `mempalace/knowledge_graph.py` and `mempalace/searcher/` and port relevant fixes.
 
 ## Current Project Status
