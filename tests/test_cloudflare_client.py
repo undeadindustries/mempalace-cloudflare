@@ -4,12 +4,109 @@ Tests that CloudflareRemoteBackend and CloudflareRemoteCollection
 correctly interact with the Cloudflare Worker API.
 """
 
+import io
 import sys
+
+import pytest
 
 sys.path.insert(0, "./client")
 
 from mempalace.backends.base import PalaceRef
 from mempalace_cloudflare_remote import CloudflareRemoteBackend, CloudflareRemoteCollection
+
+ACCESS_ENV = ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET")
+
+
+class _FakeResponse(io.BytesIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _capture_urlopen(monkeypatch, body=b"{}"):
+    """Replace urlopen and return the list of Request objects it receives."""
+    captured = []
+
+    def fake_urlopen(req, timeout=None):
+        captured.append(req)
+        return _FakeResponse(body)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    return captured
+
+
+@pytest.fixture(autouse=True)
+def no_access_env(monkeypatch):
+    for name in ACCESS_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_client_sends_access_headers_from_env(monkeypatch, no_access_env):
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "abc.access")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "s3cret")
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "tok"})
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    captured = _capture_urlopen(monkeypatch, b'{"total_drawers": 3}')
+
+    assert col.count() == 3
+    req = captured[0]
+    assert req.get_header("Authorization") == "Bearer tok"
+    assert req.get_header("Cf-access-client-id") == "abc.access"
+    assert req.get_header("Cf-access-client-secret") == "s3cret"
+
+
+def test_client_access_options_override_env(monkeypatch, no_access_env):
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "env.access")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "env-secret")
+    backend = CloudflareRemoteBackend(
+        options={
+            "url": "http://mock-worker",
+            "token": "tok",
+            "access_client_id": "opt.access",
+            "access_client_secret": "opt-secret",
+        }
+    )
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    captured = _capture_urlopen(monkeypatch)
+
+    col.count()
+    assert captured[0].get_header("Cf-access-client-id") == "opt.access"
+    assert captured[0].get_header("Cf-access-client-secret") == "opt-secret"
+
+
+def test_client_rejects_half_configured_access(monkeypatch, no_access_env):
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "abc.access")
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "tok"})
+
+    with pytest.raises(ValueError, match="CF_ACCESS_CLIENT_SECRET"):
+        backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+
+
+def test_client_without_access_sends_no_access_headers(monkeypatch, no_access_env):
+    backend = CloudflareRemoteBackend(options={"url": "http://mock-worker", "token": "tok"})
+    col = backend.get_collection(palace=PalaceRef(id="p"), collection_name="drawers")
+    captured = _capture_urlopen(monkeypatch)
+
+    col.count()
+    assert captured[0].get_header("Cf-access-client-id") is None
+
+
+def test_client_health_sends_access_headers(monkeypatch, no_access_env):
+    monkeypatch.setenv("MEMPALACE_CLOUDFLARE_URL", "http://mock-worker")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "abc.access")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "s3cret")
+    captured = _capture_urlopen(monkeypatch, b'{"status": "ok"}')
+
+    status = CloudflareRemoteBackend().health()
+    assert status.ok
+    assert captured[0].full_url == "http://mock-worker/healthz"
+    assert captured[0].get_header("Cf-access-client-id") == "abc.access"
+    # Cloudflare's bot protection can 403 urllib's default "Python-urllib" agent.
+    assert captured[0].get_header("User-agent").startswith("mempalace-cloudflare-remote/")
 
 
 def test_client_collection_construction():

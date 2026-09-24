@@ -21,9 +21,9 @@ main = "mempalace/cloudflare/entrypoint.py"
 compatibility_date = "2024-04-05"
 compatibility_flags = ["python_workers"]
 
-# Uncomment to turn off the per-version preview URLs, which change on every
-# deploy and expose the Worker on extra hostnames.
-# preview_urls = false
+# Per-version preview URLs change on every deploy and expose the Worker on
+# extra hostnames. Keep them off unless you need them.
+preview_urls = false
 
 [ai]
 binding = "AI"

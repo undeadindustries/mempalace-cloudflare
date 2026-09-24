@@ -1,7 +1,8 @@
 """Cloudflare Remote Backend Plugin for MemPalace.
 
 Enables local CLI, hooks, and MCP servers to connect to a Cloudflare Workers
-MemPalace deployment over HTTPS using Bearer token authentication.
+MemPalace deployment over HTTPS using Bearer token authentication, plus a
+Cloudflare Access service token when the Worker is behind Access.
 Zero external dependencies — uses Python standard library `urllib`.
 """
 
@@ -23,14 +24,48 @@ from mempalace.backends.base import (
     QueryResult,
 )
 
+USER_AGENT = "mempalace-cloudflare-remote/0.1.0"
+ACCESS_CLIENT_ID_ENV = "CF_ACCESS_CLIENT_ID"
+ACCESS_CLIENT_SECRET_ENV = "CF_ACCESS_CLIENT_SECRET"
+_HTTP_FORBIDDEN = 403
+
+
+def resolve_access_headers(options: Dict[str, Any]) -> Dict[str, str]:
+    """Build the Cloudflare Access service-token headers, or none.
+
+    Access rejects requests without a valid service token at Cloudflare's edge,
+    before the Worker runs, so floods never count against the Worker's request
+    quota. Both halves must be present: sending only one would be rejected by
+    Access anyway, and a silent half-configuration is hard to diagnose.
+    """
+    client_id = options.get("access_client_id") or os.environ.get(ACCESS_CLIENT_ID_ENV) or ""
+    secret = options.get("access_client_secret") or os.environ.get(ACCESS_CLIENT_SECRET_ENV) or ""
+    if bool(client_id) != bool(secret):
+        missing = ACCESS_CLIENT_SECRET_ENV if client_id else ACCESS_CLIENT_ID_ENV
+        raise ValueError(
+            f"Cloudflare Access needs both {ACCESS_CLIENT_ID_ENV} and "
+            f"{ACCESS_CLIENT_SECRET_ENV}; {missing} is not set."
+        )
+    if not client_id:
+        return {}
+    return {"CF-Access-Client-Id": client_id, "CF-Access-Client-Secret": secret}
+
 
 class CloudflareRemoteCollection(BaseCollection):
     """Collection proxying operations to a remote Cloudflare Worker over HTTP."""
 
-    def __init__(self, base_url: str, token: str, namespace: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        namespace: Optional[str] = None,
+        *,
+        access_headers: Optional[Dict[str, str]] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.namespace = namespace
+        self.access_headers = dict(access_headers or {})
         self._next_rpc_id = 1
 
     def _request(
@@ -46,7 +81,8 @@ class CloudflareRemoteCollection(BaseCollection):
 
         headers = {
             "Authorization": f"Bearer {self.token}",
-            "User-Agent": "mempalace-cloudflare-remote/0.1.0",
+            "User-Agent": USER_AGENT,
+            **self.access_headers,
         }
         req_body = None
         if data is not None:
@@ -60,7 +96,13 @@ class CloudflareRemoteCollection(BaseCollection):
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8")
-            raise RuntimeError(f"Cloudflare Worker HTTP {e.code}: {err_body}") from e
+            hint = ""
+            if e.code == _HTTP_FORBIDDEN and not self.access_headers:
+                hint = (
+                    " (likely blocked by Cloudflare Access: set "
+                    f"{ACCESS_CLIENT_ID_ENV} and {ACCESS_CLIENT_SECRET_ENV})"
+                )
+            raise RuntimeError(f"Cloudflare Worker HTTP {e.code}{hint}: {err_body}") from e
         except urllib.error.URLError as e:
             raise RuntimeError(
                 f"Failed to connect to Cloudflare Worker at {self.base_url}: {e.reason}"
@@ -249,12 +291,18 @@ class CloudflareRemoteBackend(BaseBackend):
             base_url=url,
             token=token,
             namespace=palace.namespace,
+            access_headers=resolve_access_headers(opts),
         )
 
     def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus:
-        url = os.environ.get("MEMPALACE_CLOUDFLARE_URL", "http://localhost:8787").rstrip("/")
+        url = (
+            self.options.get("url")
+            or os.environ.get("MEMPALACE_CLOUDFLARE_URL")
+            or "http://localhost:8787"
+        ).rstrip("/")
         try:
-            req = urllib.request.Request(f"{url}/healthz", method="GET")
+            headers = {"User-Agent": USER_AGENT, **resolve_access_headers(self.options)}
+            req = urllib.request.Request(f"{url}/healthz", headers=headers, method="GET")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
                     return HealthStatus.healthy(f"Connected to Cloudflare Worker at {url}")

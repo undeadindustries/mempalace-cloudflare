@@ -15,7 +15,7 @@ Act as a senior Python engineer with decades of deep experience in CPython, pack
 1. **Upstream stays pristine.** Zero modifications to upstream engine files (`mempalace/palace/`, `mempalace/backends/base.py`, `pyproject.toml`, `CLAUDE.md`, etc.). All fork code is additive: new files only, registered dynamically at runtime via the existing backend registry and configuration — never hardcoded into upstream logic.
 2. **Verbatim always.** Inherited engine invariant: never summarize, paraphrase, or lossy-compress user content. Drawers store exact words; the index points at them.
 3. **Incremental only.** Append-only ingest. A crash mid-operation must leave existing data untouched — in this fork, that includes R2 objects, Vectorize vectors, and D1 rows.
-4. **Auth on every route.** Every route except `/healthz` validates `Authorization: Bearer <token>` against `env.MEMPALACE_API_KEY` (Cloudflare secret). Missing or invalid token → `401`. Unset secret → `503`.
+4. **Auth on every route.** Every route except `/healthz` validates `Authorization: Bearer <token>` against `env.MEMPALACE_API_KEY` (Cloudflare secret). Missing or invalid token → `401`. Unset secret → `503`. The deployed Worker is also behind Cloudflare Access (decision 8), so every client must send the service-token headers too.
 5. **Research-first.** Verify Cloudflare Python Workers APIs, binding names, and runtime limits against current official docs before writing code. Tag claims [Certain] / [Likely] / [Guessing].
 6. **Model the unhappy path.** Partial failures across Vectorize/D1/R2 are the norm, not the exception. Design for retryable, idempotent operations.
 7. **No secrets or account identifiers in git.** API keys live in `wrangler secret`. `wrangler.toml`, `.env` and `.dev.vars*` are gitignored. Do not commit the Worker hostname, D1 ids, account ids, or local paths.
@@ -54,7 +54,7 @@ wrangler.toml.example          # Worker config template; wrangler.toml is genera
 migrations/0001_kg.sql         # D1 knowledge graph tables
 migrations/0002_registry.sql   # D1 drawer registry table
 scripts/cloudflare_bootstrap.sh  # Idempotent resource setup; writes wrangler.toml
-scripts/test_smoke.py          # Live smoke test (healthz, 401, status, MCP tools/list)
+scripts/test_smoke.py          # Live smoke test (Access 403, healthz, 401, status, MCP tools/list); secrets from env
 mempalace/backends/cloudflare_vectorize.py  # BaseBackend adapter, registered via the upstream registry
 mempalace/cloudflare/          # Everything bundled into the Worker
   entrypoint.py                # ASGI app, Bearer middleware, REST routes, MCP Streamable HTTP
@@ -91,11 +91,14 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 5. **Per-account config is never committed.** `wrangler.toml` and `.env` are gitignored; only `.example` templates are tracked. The bootstrap generates `wrangler.toml` by replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`. Resource names are duplicated as constants at the top of the bootstrap script and must match the template.
 6. **AGENTS.md is tracked.** Reversed from an earlier local-only decision: AGENTS.md is the cross-tool standard (Linux Foundation Agentic AI Foundation; read by Cursor, Codex, Copilot, Gemini CLI), and the maintainers work across many machines. Account-specific values stay out of it (see principle 7).
 7. **Copied helpers.** Cloudflare Python Workers bundle only `mempalace/cloudflare/`, so the Worker cannot import the upstream engine at runtime. ID hashing, ISO date validation and search ranking are copied. After each upstream merge, check the diff of `mempalace/ids.py`, `mempalace/knowledge_graph.py` and `mempalace/searcher/` and port relevant fixes.
+8. **Cloudflare Access service token in front of the Worker.** Without it, junk requests still invoke the Worker (and get `401`), so a flood could exhaust the free plan's daily request allowance. Access checks each request at the edge before the Worker runs. Configured in the dashboard, not in code: Worker Access on **all traffic** (production and previews) with a **Service Auth** policy (an Allow policy would send callers to a browser login) holding one service token. Clients send `CF-Access-Client-Id` / `CF-Access-Client-Secret`, read from `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`; the client plugin raises `ValueError` if only one is set. The Worker does not validate the `Cf-Access-Jwt-Assertion` header itself; the bearer token remains the in-Worker check. `preview_urls = false` is set in the template so only the production hostname exists.
+9. **Client requests always send a custom User-Agent.** Cloudflare's bot protection returned `403` to urllib's default `Python-urllib/*` agent on `/healthz` even with a valid service token. Every request in `client/` uses `USER_AGENT`.
 
 ## Current Project Status
 
-- Cloudflare-native MemPalace v1 is deployed and passing the live smoke test.
-- 27/27 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity). Full suite last run (after merging upstream #2567 and #2569): 5654 passed, 58 skipped, 1 pre-existing failure in `tests/test_embedding.py` (ChromaDB ONNX provider mock, unrelated to the fork). Run the suite outside restrictive sandboxes: `tests/test_antigravity_hooks_shell.py` writes state files outside the repo and fails under a workspace-only sandbox.
+- Cloudflare-native MemPalace v1 is deployed behind Cloudflare Access and passing the live smoke test (Access 403 without the service token, then healthz, 401, status, 25 MCP tools). The client plugin's `health()` and `count()` were also verified live through Access.
+- The Cloudflare palace is empty (0 drawers). The maintainers' existing drawers are in their local palace, not on Cloudflare.
+- 32/32 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity). Full suite last run (after merging upstream #2567 and #2569): 5654 passed, 58 skipped, 1 pre-existing failure in `tests/test_embedding.py` (ChromaDB ONNX provider mock, unrelated to the fork). Run the suite outside restrictive sandboxes: `tests/test_antigravity_hooks_shell.py` writes state files outside the repo and fails under a workspace-only sandbox.
 - Free-tier cost target: $0/month for one developer.
 
 ## Completed Milestones
@@ -109,11 +112,15 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 - [x] Fix 5 Bugbot findings (202 notifications, `kg_add` without `valid_from`, Vectorize → D1 → R2 delete order with ghost-hit filtering, checkpoint `source_file`, request body bytes)
 - [x] Config templates: `wrangler.toml` gitignored and scrubbed from history before first push; `wrangler.toml.example` + `.env.example`; idempotent bootstrap that generates `wrangler.toml`
 - [x] `GET`/`DELETE /mcp` → 405; MCP protocol version negotiation
+- [x] Cloudflare Access service token: client plugin, smoke test and README send the headers; preview URLs off
 
 ## Open TODOs
 
-- [ ] Verify Cursor end-to-end against the live Worker.
+- [ ] Verify Cursor end-to-end against the live Worker (needs `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` and `MEMPALACE_API_KEY` in the environment Cursor starts with, plus the three headers in `mcp.json`).
 - [ ] `on_fetch` returns `str(exc)` in the 500 body; consider logging only and returning a generic message.
+- [ ] Security hardening not yet done: `hmac.compare_digest` for the bearer comparison; clamp `limit` on `GET /api/drawers` and reject non-numeric values; enable Workers observability; R2 bucket lock; optional `Cf-Access-Jwt-Assertion` validation in the Worker.
+- [ ] Python.org framework builds of Python on macOS ship without a CA bundle until "Install Certificates.command" is run; the client then fails TLS with `CERTIFICATE_VERIFY_FAILED`. Workaround: `SSL_CERT_FILE=$(python -m certifi)`. Consider documenting it in the README.
+- [ ] `uv.lock` is stale upstream (`pyproject.toml` pins ruff 0.16.6, lock says 0.16.1), so `uv run` rewrites it. Leave it out of fork commits; the next upstream merge should bring a fresh lock.
 
 ## Future Roadmap (v2 / Post-v1)
 

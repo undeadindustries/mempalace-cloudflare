@@ -138,10 +138,11 @@ Wrangler prints the URL, for example `https://mempalace-cf.<your-subdomain>.work
 **5. Run the smoke test.**
 
 ```bash
-python3 scripts/test_smoke.py --url https://mempalace-cf.<your-subdomain>.workers.dev --token <your-api-key>
+export MEMPALACE_API_KEY=<your-api-key>
+python3 scripts/test_smoke.py --url https://mempalace-cf.<your-subdomain>.workers.dev
 ```
 
-It checks `/healthz`, checks that a request without the token gets `401`, calls `/api/status` with the token, and lists the MCP tools.
+It checks `/healthz`, checks that a request without the token gets `401`, calls `/api/status` with the token, and lists the MCP tools. The script reads the key from `MEMPALACE_API_KEY` so it does not end up in your shell history. If you set up Cloudflare Access (below), also export `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`, and the script checks that a request without the service token is refused.
 
 ### The URL does not change when you redeploy
 
@@ -149,17 +150,32 @@ The workers.dev URL is `<worker name>.<account subdomain>.workers.dev`. `npx wra
 
 You do not need a custom domain or a DNS record.
 
-Cloudflare can also serve a separate preview URL for each version, `<version>-mempalace-cf.<subdomain>.workers.dev`. Those URLs change with every deploy, and they expose the same Worker on more hostnames. To turn them off, add `preview_urls = false` to `wrangler.toml` and deploy again.
+Cloudflare can also serve a separate preview URL for each version, `<version>-mempalace-cf.<subdomain>.workers.dev`. Those URLs change with every deploy, and they expose the same Worker on more hostnames. `wrangler.toml.example` sets `preview_urls = false`, which turns them off. If your `wrangler.toml` was generated before that line existed, add it and deploy again.
+
+### Put Cloudflare Access in front (recommended)
+
+Without Access, anyone who knows the URL can send requests. A wrong token gets `401`, but the Worker still runs for each one, and every request counts toward the free plan's daily Workers limit. A flood of junk requests could use it up and lock you out until the limit resets.
+
+Cloudflare Access fixes this. It checks every request at Cloudflare's edge before the Worker runs. Your machines send a service token in two extra headers, and anything without a valid token is refused at the edge with `403`. The bearer token still applies behind Access, so a caller needs both.
+
+1. In the Cloudflare dashboard, go to **Zero Trust** > **Access** > **Service credentials** > **Service Tokens** and create a token. Copy the Client ID and the Client Secret right away. The secret is shown only once.
+2. Create an Access policy with the action **Service Auth** (not **Allow**, which sends callers to a browser login page) and include that service token. A session duration of 15 minutes is fine.
+3. Go to **Workers & Pages**, select the Worker, and open its Access settings. Protect **all traffic** (production and previews) with that policy.
+4. Check it. Without the service token, `curl -i https://mempalace-cf.<your-subdomain>.workers.dev/healthz` should return `403`.
+
+Keep the Client ID and Client Secret with your API key, in your password manager. To rotate them, create a new service token, add it to the policy, update your machines, then revoke the old one.
 
 ### Connect your machines
 
-On each machine, put the API key in an environment variable, for example in your shell profile:
+On each machine, put the API key in an environment variable, for example in your shell profile. If you set up Access, add the service token too:
 
 ```bash
 export MEMPALACE_API_KEY=<your-api-key>
+export CF_ACCESS_CLIENT_ID=<service-token-client-id>
+export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
 ```
 
-**Cursor.** Add the Worker to `~/.cursor/mcp.json`. Cursor reads `${env:MEMPALACE_API_KEY}` from the environment, so the key stays out of the file.
+**Cursor.** Add the Worker to `~/.cursor/mcp.json`. Cursor fills in each `${env:...}` value from the environment, so the secrets stay out of the file. Leave out the two `CF-Access-*` lines if you do not use Access.
 
 ```json
 {
@@ -167,14 +183,16 @@ export MEMPALACE_API_KEY=<your-api-key>
     "mempalace": {
       "url": "https://mempalace-cf.<your-subdomain>.workers.dev/mcp",
       "headers": {
-        "Authorization": "Bearer ${env:MEMPALACE_API_KEY}"
+        "Authorization": "Bearer ${env:MEMPALACE_API_KEY}",
+        "CF-Access-Client-Id": "${env:CF_ACCESS_CLIENT_ID}",
+        "CF-Access-Client-Secret": "${env:CF_ACCESS_CLIENT_SECRET}"
       }
     }
   }
 }
 ```
 
-**Other MCP clients.** Any client that supports MCP over Streamable HTTP and custom request headers can connect. Point it at `https://mempalace-cf.<your-subdomain>.workers.dev/mcp` and send `Authorization: Bearer <your-api-key>`.
+**Other MCP clients.** Any client that supports MCP over Streamable HTTP and custom request headers can connect. Point it at `https://mempalace-cf.<your-subdomain>.workers.dev/mcp` and send `Authorization: Bearer <your-api-key>`, plus `CF-Access-Client-Id` and `CF-Access-Client-Secret` if you use Access.
 
 **The `mempalace` CLI (optional).** If you want the CLI on a machine, install upstream MemPalace and the client plugin in this repo into the same environment. The plugin adds a `cloudflare-remote` backend that sends reads and writes to the Worker.
 
@@ -185,13 +203,16 @@ export MEMPALACE_CLOUDFLARE_URL=https://mempalace-cf.<your-subdomain>.workers.de
 export MEMPALACE_CLOUDFLARE_TOKEN=<your-api-key>
 ```
 
+The plugin also sends the Access service token when `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set. Set both or neither. If only one is set, the plugin stops with an error rather than sending requests that Access would refuse.
+
 This installs MemPalace on that machine. Skip it on machines where an MCP client is enough.
 
 ### Security
 
 - Every route except `/healthz` requires `Authorization: Bearer <token>`. A missing or wrong token gets `401`. If the secret is not set, the Worker returns `503` and does not serve data.
+- With Cloudflare Access in front, every route, including `/healthz`, also requires the service token. Requests without it never reach the Worker.
 - To rotate the key, run `npx wrangler secret put MEMPALACE_API_KEY` with a new value, then update the environment variable on each machine.
-- The token is the only access control. Treat it like a password.
+- Without Access, the bearer token is the only access control. With Access, a caller needs both the service token and the bearer token. Treat both like passwords.
 
 ### Cost
 
