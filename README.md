@@ -167,15 +167,7 @@ Keep the Client ID and Client Secret with your API key, in your password manager
 
 ### Connect your machines
 
-On each machine, put the API key in an environment variable, for example in your shell profile. If you set up Access, add the service token too:
-
-```bash
-export MEMPALACE_API_KEY=<your-api-key>
-export CF_ACCESS_CLIENT_ID=<service-token-client-id>
-export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
-```
-
-**Cursor.** Add the Worker to `~/.cursor/mcp.json`. Cursor fills in each `${env:...}` value from the environment, so the secrets stay out of the file. Leave out the two `CF-Access-*` lines if you do not use Access.
+**Cursor.** Add the Worker to your user-level `~/.cursor/mcp.json` and paste in your values. Leave out the two `CF-Access-*` lines if you do not use Access. Do not put this entry in a project's `.cursor/mcp.json`, which is easy to commit by mistake.
 
 ```json
 {
@@ -183,14 +175,16 @@ export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
     "mempalace": {
       "url": "https://mempalace-cf.<your-subdomain>.workers.dev/mcp",
       "headers": {
-        "Authorization": "Bearer ${env:MEMPALACE_API_KEY}",
-        "CF-Access-Client-Id": "${env:CF_ACCESS_CLIENT_ID}",
-        "CF-Access-Client-Secret": "${env:CF_ACCESS_CLIENT_SECRET}"
+        "Authorization": "Bearer <your-api-key>",
+        "CF-Access-Client-Id": "<service-token-client-id>",
+        "CF-Access-Client-Secret": "<service-token-client-secret>"
       }
     }
   }
 }
 ```
+
+If you would rather keep the values out of the file, Cursor also accepts `${env:NAME}` in any header value, for example `"Bearer ${env:MEMPALACE_API_KEY}"`. The variable then has to be set in the environment Cursor starts with.
 
 **Other MCP clients.** Any client that supports MCP over Streamable HTTP and custom request headers can connect. Point it at `https://mempalace-cf.<your-subdomain>.workers.dev/mcp` and send `Authorization: Bearer <your-api-key>`, plus `CF-Access-Client-Id` and `CF-Access-Client-Secret` if you use Access.
 
@@ -201,9 +195,11 @@ pip install -e client/
 export MEMPALACE_BACKEND=cloudflare-remote
 export MEMPALACE_CLOUDFLARE_URL=https://mempalace-cf.<your-subdomain>.workers.dev
 export MEMPALACE_CLOUDFLARE_TOKEN=<your-api-key>
+export CF_ACCESS_CLIENT_ID=<service-token-client-id>
+export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
 ```
 
-The plugin also sends the Access service token when `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set. Set both or neither. If only one is set, the plugin stops with an error rather than sending requests that Access would refuse.
+The plugin sends the Access service token when `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set. Set both or neither. If only one is set, the plugin stops with an error rather than sending requests that Access would refuse.
 
 This installs MemPalace on that machine. Skip it on machines where an MCP client is enough.
 
@@ -211,7 +207,7 @@ This installs MemPalace on that machine. Skip it on machines where an MCP client
 
 - Every route except `/healthz` requires `Authorization: Bearer <token>`. A missing or wrong token gets `401`. If the secret is not set, the Worker returns `503` and does not serve data.
 - With Cloudflare Access in front, every route, including `/healthz`, also requires the service token. Requests without it never reach the Worker.
-- To rotate the key, run `npx wrangler secret put MEMPALACE_API_KEY` with a new value, then update the environment variable on each machine.
+- To rotate the key, run `npx wrangler secret put MEMPALACE_API_KEY` with a new value, then update `mcp.json` (and `MEMPALACE_CLOUDFLARE_TOKEN`, if you use the CLI) on each machine.
 - Without Access, the bearer token is the only access control. With Access, a caller needs both the service token and the bearer token. Treat both like passwords.
 
 ### Cost

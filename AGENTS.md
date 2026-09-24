@@ -93,6 +93,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 7. **Copied helpers.** Cloudflare Python Workers bundle only `mempalace/cloudflare/`, so the Worker cannot import the upstream engine at runtime. ID hashing, ISO date validation and search ranking are copied. After each upstream merge, check the diff of `mempalace/ids.py`, `mempalace/knowledge_graph.py` and `mempalace/searcher/` and port relevant fixes.
 8. **Cloudflare Access service token in front of the Worker.** Without it, junk requests still invoke the Worker (and get `401`), so a flood could exhaust the free plan's daily request allowance. Access checks each request at the edge before the Worker runs. Configured in the dashboard, not in code: Worker Access on **all traffic** (production and previews) with a **Service Auth** policy (an Allow policy would send callers to a browser login) holding one service token. Clients send `CF-Access-Client-Id` / `CF-Access-Client-Secret`, read from `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`; the client plugin raises `ValueError` if only one is set. The Worker does not validate the `Cf-Access-Jwt-Assertion` header itself; the bearer token remains the in-Worker check. `preview_urls = false` is set in the template so only the production hostname exists.
 9. **Client requests always send a custom User-Agent.** Cloudflare's bot protection returned `403` to urllib's default `Python-urllib/*` agent on `/healthz` even with a valid service token. Every request in `client/` uses `USER_AGENT`.
+10. **The harness owns its config file.** Docs say what goes in the MCP client's config (`mcp.json` headers as plain values; `${env:NAME}` shown only as an alternative). Protecting that file is the harness's job; the fork does not check file permissions or require environment variables for MCP clients. Keyed entries belong in user-level config, never in a project's `.cursor/mcp.json`.
 
 ## Current Project Status
 
@@ -116,7 +117,8 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 
 ## Open TODOs
 
-- [ ] Verify Cursor end-to-end against the live Worker (needs `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` and `MEMPALACE_API_KEY` in the environment Cursor starts with, plus the three headers in `mcp.json`).
+- [ ] Verify Cursor end-to-end against the live Worker (a URL entry in `~/.cursor/mcp.json` with the three headers as plain values).
+- [ ] The `mempalace` CLI (and Sagittarius hooks through it) can only take the Worker URL, token and service token from environment variables, because upstream's registry instantiates backends with no options (`registry.py`, `cls()`).
 - [ ] `on_fetch` returns `str(exc)` in the 500 body; consider logging only and returning a generic message.
 - [ ] Security hardening not yet done: `hmac.compare_digest` for the bearer comparison; clamp `limit` on `GET /api/drawers` and reject non-numeric values; enable Workers observability; R2 bucket lock; optional `Cf-Access-Jwt-Assertion` validation in the Worker.
 - [ ] Python.org framework builds of Python on macOS ship without a CA bundle until "Install Certificates.command" is run; the client then fails TLS with `CERTIFICATE_VERIFY_FAILED`. Workaround: `SSL_CERT_FILE=$(python -m certifi)`. Consider documenting it in the README.
