@@ -97,15 +97,16 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 11. **R2 bucket lock rejected.** A bucket lock prevents deleting and overwriting objects within retention periods, directly conflicting with verbatim drawer operations `mempalace_delete_drawer` and `mempalace_update_drawer`. Backups remain optional (via D1 Time Travel and manual exports).
 12. **In-Worker Access JWT verification dropped.** Access checks every request at Cloudflare's edge on all hostnames. Preview URLs are disabled, and Worker Bearer token validation provides defence in depth. Validating RS256 JWT signatures inside the Worker Python runtime would require manual WebCrypto JWKS fetching on cold starts without significant security benefit.
 13. **Local bge-small import.** `POST /api/drawers/batch` accepts up to 100 drawers with precomputed 384-dim embeddings so a palace import does not spend Workers AI neurons. `scripts/import_local_palace.py` reads the local Chroma palace and embeds with ONNX `Xenova/bge-small-en-v1.5`. Vectorize and Workers AI bindings must receive `pyodide.ffi.to_js` values (`jsutil.as_js`). Vectorize ids longer than 64 bytes are sha256 keys; the original id is stored on the vector metadata and in D1.
+14. **D1 FTS5 Trigram Candidate Union for 100% Recall.** Vectorize's `topK <= 50` limit and dense embedding blindspots on exact mechanical tokens (code snippets, logs, hex IDs) caused a recall gap. Solved via SQLite FTS5 with `tokenize='trigram'` in `drawers_fts` on D1 (`migrations/0003_fts.sql`). In `execute_hybrid_search()`, Vectorize ANN candidates (top 50) and D1 FTS candidates (top 50) are fetched concurrently via `asyncio.gather()`, unioned by drawer ID, and re-ranked with Okapi BM25 and cosine similarity. Lexical-only candidates impute similarity from lexical alignment (`norm * 0.7`) so exact keyword matches decisively surface into top results alongside semantic matches.
 
 ## Current Project Status
 
 - Cloudflare-native MemPalace v1 is deployed behind Cloudflare Access and passing the live smoke test (Access 403 without the service token, then healthz, 401, status, 25 MCP tools).
 - Hardened ASGI entrypoint: constant-time `hmac.compare_digest` on bearer tokens, generic 500 responses with request correlation IDs, validated and clamped paging (`MAX_PAGE_LIMIT = 100`) on REST and MCP tools, and Workers observability enabled.
 - The Cloudflare palace holds two machines' palaces: 138,881 drawers across 68 wings and 2,075 rooms (D1 registry and Vectorize counts match). 55,705 came from the maintainer's Mac and 83,176 from a second machine (imported from a SQLite `.backup` snapshot so its live palace stayed read only). The two sets share no drawer ids or wings; 88 of its drawers repeat text already present under another id and were imported as-is. Random 40-drawer samples from each source matched verbatim. Closets (`mempalace_closets`) and the knowledge graphs were not imported.
-- Known constraint: search recall on code and log fragments. `search.py` re-ranks only the top `min(50, max(20, 2 × n_results))` Vectorize candidates, with no corpus-wide lexical path. In the second machine's sample, 32/40 drawers ranked in the top 10 for their own opening 15 words; the 8 misses are mid-word 800-char chunks of JSON, Go code or download logs. Querying with each missed drawer's full text ranks it first, so the stored vectors are correct.
+- D1 FTS5 trigram candidate union deployed and verified: exact keyword and code fragment matches (`renderFooter`, `probe-large-file`) reliably match via `matched_via: fts` or `both` and rank at the top, closing the search recall gap on mechanical and structured tokens.
 - The account runs on Workers Paid ($5/month). The full palace exceeds the Free plan (Vectorize 5M stored dimensions, D1 100k row writes/day, 10 ms CPU per request).
-- 43/43 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity, hardening, config resolution, batch import).
+- 46/46 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity, hardening, config resolution, batch import, FTS candidate union).
 - Known constraint: `uv.lock` is stale upstream (`pyproject.toml` pins ruff 0.16.6, lock says 0.16.1), so `uv run` rewrites it locally. Leave it out of fork commits until upstream brings a fresh lock.
 - Known constraint: `scripts/import_local_palace.py --resume` continues from a Chroma page offset, and Chroma does not guarantee insertion order, so it is not an incremental sync. To pick up drawers added locally after the import, run it without `--resume`; batches upsert by drawer id.
 
@@ -125,11 +126,11 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 - [x] Verified Cursor client configuration in `~/.cursor/mcp.json`
 - [x] Imported the local palace (55,705 drawers) with local bge-small embeddings, 0 Workers AI neurons. 34,232 drawer ids exceed Vectorize's 64-byte id limit; those use a sha256 vector key while D1 and R2 keep the original id. On the Free plan the importer needs `--batch 5` (CPU limit, error 1102); the default of 20 is for Paid.
 - [x] Imported a second machine's palace (83,176 drawers) with `--palace <snapshot dir> --progress <separate file>`, about 2.5 hours, no retries.
+- [x] D1 FTS5 trigram candidate union (`migrations/0003_fts.sql`, `d1_registry.py`, `search.py`, `vectorize_collection.py`, `scripts/backfill_d1_fts.py`) to close the search recall gap on code snippets, log fragments, and exact identifiers.
 
 ## Open TODOs
 
 - [ ] Decide whether to import the local knowledge graph (SQLite) into D1 and the closets (`mempalace_closets`, ~1.8k).
-- [ ] Close the search recall gap on code/log fragments (see Known constraint), for example a corpus-wide lexical index in D1 merged with the Vectorize candidates.
 
 ## Future Roadmap (v2 / Post-v1)
 

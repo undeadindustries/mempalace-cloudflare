@@ -632,3 +632,41 @@ def test_batch_drawers_rejects_bad_shape():
         assert count == 0
 
     asyncio.run(_test())
+
+
+def test_backfill_fts_endpoint():
+    async def _test():
+        env = create_test_env(api_key="secret")
+        app = CloudflareMemPalaceApp(env=env)
+        headers = {b"authorization": b"Bearer secret"}
+
+        # Add 2 drawers to collection (R2 + D1 drawers table)
+        tools = app._get_tools(env)
+        await tools.col.a_upsert(
+            documents=["First verbatim memory content", "Second verbatim memory content"],
+            ids=["drawer-bf-1", "drawer-bf-2"],
+            metadatas=[{"wing": "w1", "room": "r1"}, {"wing": "w2", "room": "r2"}],
+        )
+
+        # Clear FTS to simulate existing drawers that need backfill
+        await tools.reg.delete_drawers_fts(["drawer-bf-1", "drawer-bf-2"])
+        assert len(await tools.reg.search_fts("First")) == 0
+
+        # Call backfill endpoint
+        res = await send_asgi_request(
+            app,
+            "POST",
+            "/api/backfill/fts",
+            body={"limit": 10},
+            headers=headers,
+        )
+        assert res["status"] == 200
+        assert res["json"]["processed"] == 2
+        assert res["json"]["done"] is True
+
+        # Verify FTS search now finds them
+        hits = await tools.reg.search_fts("First")
+        assert len(hits) == 1
+        assert hits[0]["id"] == "drawer-bf-1"
+
+    asyncio.run(_test())

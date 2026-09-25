@@ -52,5 +52,6 @@ wrangler.toml
 .dev.vars*
 .wrangler/
 !.env.example
+scripts/.fts_backfill_cursor*
 # END mempalace-cloudflare fork
 

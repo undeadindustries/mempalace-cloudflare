@@ -116,6 +116,8 @@ class FakeD1Database:
             self.conn.executescript(f.read())
         with open("migrations/0002_registry.sql") as f:
             self.conn.executescript(f.read())
+        with open("migrations/0003_fts.sql") as f:
+            self.conn.executescript(f.read())
         self.conn.commit()
 
     def prepare(self, sql: str) -> FakeD1Statement:
@@ -515,3 +517,93 @@ def test_backend_factory_registration():
     col = backend.get_collection(palace=palace, collection_name="drawers")
     assert isinstance(col, CloudflareVectorizeCollection)
     assert backend.health().ok is True
+
+
+def test_d1_registry_fts_crud_and_search():
+    async def _test():
+        db = FakeD1Database()
+        reg = D1DrawerRegistry(db)
+
+        # 1. Upsert drawer into FTS
+        await reg.upsert_drawer_fts(
+            drawer_id="did-code-1",
+            wing="coding",
+            room="tui",
+            content="func renderFooter(status ui.StatusBar, th t) {\n  draw()\n}",
+        )
+
+        # 2. Search exact code fragment
+        hits = await reg.search_fts("renderFooter(status")
+        assert len(hits) == 1
+        assert hits[0]["id"] == "did-code-1"
+        assert hits[0]["wing"] == "coding"
+        assert "renderFooter" in hits[0]["content"]
+
+        # 3. Search with wing filter
+        w_hits = await reg.search_fts("renderFooter", wing="coding")
+        assert len(w_hits) == 1
+        w_miss = await reg.search_fts("renderFooter", wing="other_wing")
+        assert len(w_miss) == 0
+
+        # 4. Search with words < 3 chars returns empty
+        short_hits = await reg.search_fts("ui th")
+        assert len(short_hits) == 0
+
+        # 5. Delete drawer from FTS
+        await reg.delete_drawer_fts("did-code-1")
+        del_hits = await reg.search_fts("renderFooter")
+        assert len(del_hits) == 0
+
+    asyncio.run(_test())
+
+
+def test_candidate_union_surfaces_lexical_only_hits():
+    async def _test():
+        ai = FakeWorkersAI()
+        r2 = FakeR2Bucket()
+        db = FakeD1Database()
+        vec = FakeVectorizeIndex()
+        col = CloudflareVectorizeCollection(
+            vector_index=vec,
+            ai_embedder=WorkersAIEmbedder(ai),
+            r2_storage=R2DrawerStorage(r2),
+            d1_registry=D1DrawerRegistry(db),
+        )
+
+        # Add regular semantic document through collection upsert (goes to Vectorize + R2 + D1 + FTS)
+        await col.a_upsert(
+            documents=["General software engineering and application architecture."],
+            ids=["doc-sem-1"],
+            metadatas=[{"wing": "arch", "room": "general"}],
+        )
+
+        # Simulate a document that Vectorize missed (only in D1 registry + FTS)
+        await col.d1.upsert_drawer(
+            drawer_id="doc-lex-1",
+            wing="spark1_code",
+            room="tui",
+            r2_key="drawers/doc-lex-1.txt",
+            content_hash="hash-lex",
+            metadata={"wing": "spark1_code", "room": "tui", "authored_at": "2026-09-24T00:00:00"},
+        )
+        await col.d1.upsert_drawer_fts(
+            drawer_id="doc-lex-1",
+            wing="spark1_code",
+            room="tui",
+            content="func renderFooter(status ui.StatusBar, th t) {\n  draw()\n}",
+        )
+
+        # Search for the exact code fragment
+        results = await execute_hybrid_search(
+            collection=col,
+            query="renderFooter(status ui.StatusBar",
+            n_results=5,
+        )
+
+        # The lexical-only hit should be surfaced via FTS candidate union and ranked #1
+        assert len(results) >= 1
+        assert results[0]["id"] == "doc-lex-1"
+        assert results[0]["matched_via"] == "fts"
+        assert "renderFooter" in results[0]["text"]
+
+    asyncio.run(_test())

@@ -242,6 +242,10 @@ class CloudflareMemPalaceApp:
             await self._send_json(send, status_code, res)
             return
 
+        if path == "/api/backfill/fts" and method == "POST":
+            await self._handle_backfill_fts(send, body_json, tools)
+            return
+
         if path == "/api/drawers" and method == "POST":
             w = body_json.get("wing", "general")
             r = body_json.get("room", "inbox")
@@ -307,6 +311,61 @@ class CloudflareMemPalaceApp:
             wing=wing, room=room, limit=limit, offset=offset, include_content=include_content
         )
         await self._send_json(send, 200, {"drawers": res})
+
+    async def _handle_backfill_fts(
+        self,
+        send: Callable,
+        body_json: Dict[str, Any],
+        tools: CloudflarePalaceTools,
+    ) -> None:
+        raw_limit = body_json.get("limit", 100)
+        try:
+            limit = int(raw_limit)
+            if limit < 1:
+                limit = 100
+        except (ValueError, TypeError):
+            limit = 100
+        limit = min(limit, 200)
+        cursor = body_json.get("cursor")
+        end_cursor = body_json.get("end_cursor")
+
+        if cursor and end_cursor:
+            sql = "SELECT id, wing, room FROM drawers WHERE id > ? AND id <= ? ORDER BY id ASC LIMIT ?"
+            params = [str(cursor), str(end_cursor), limit]
+        elif cursor:
+            sql = "SELECT id, wing, room FROM drawers WHERE id > ? ORDER BY id ASC LIMIT ?"
+            params = [str(cursor), limit]
+        elif end_cursor:
+            sql = "SELECT id, wing, room FROM drawers WHERE id <= ? ORDER BY id ASC LIMIT ?"
+            params = [str(end_cursor), limit]
+        else:
+            sql = "SELECT id, wing, room FROM drawers ORDER BY id ASC LIMIT ?"
+            params = [limit]
+
+        rows = await tools.reg._query_raw(sql, params)
+        if not rows:
+            await self._send_json(send, 200, {"processed": 0, "next_cursor": None, "done": True})
+            return
+
+        target_ids = [r["id"] for r in rows]
+        docs_map = await tools.r2.get_drawers(target_ids)
+        items = [
+            {
+                "id": r["id"],
+                "wing": r.get("wing", "general"),
+                "room": r.get("room", "inbox"),
+                "content": docs_map.get(r["id"], ""),
+            }
+            for r in rows
+        ]
+        processed = await tools.reg.batch_upsert_drawers_fts(items)
+        next_cursor = rows[-1]["id"] if rows else None
+        is_done = len(rows) < limit
+        await self._send_json(
+            send,
+            200,
+            {"processed": processed, "next_cursor": next_cursor, "done": is_done},
+        )
 
     async def _handle_mcp(
         self,

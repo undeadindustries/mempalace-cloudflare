@@ -31,7 +31,7 @@ readonly SECRET_NAME="MEMPALACE_API_KEY"
 readonly CONFIG_FILE="wrangler.toml"
 readonly CONFIG_TEMPLATE="wrangler.toml.example"
 readonly D1_ID_PLACEHOLDER="REPLACE_WITH_YOUR_D1_DATABASE_ID"
-readonly MIGRATION_FILES=(migrations/0001_kg.sql migrations/0002_registry.sql)
+readonly MIGRATION_FILES=(migrations/0001_kg.sql migrations/0002_registry.sql migrations/0003_fts.sql)
 readonly UUID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 
 step() { printf '\n==> %s\n' "$*"; }

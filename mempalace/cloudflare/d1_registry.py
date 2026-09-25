@@ -6,7 +6,13 @@ Complements Vectorize (ANN) and R2 (verbatim bodies).
 """
 
 import json
+import logging
+import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_FTS_TOKEN_RE = re.compile(r"\b\w+\b")
 
 try:
     from .jsutil import bind_params
@@ -161,6 +167,133 @@ class D1DrawerRegistry:
         placeholders = ",".join(["?"] * len(drawer_ids))
         sql = f"DELETE FROM drawers WHERE id IN ({placeholders})"
         await self._execute_raw(sql, drawer_ids)
+        await self.delete_drawers_fts(drawer_ids)
+
+    async def upsert_drawer_fts(
+        self,
+        drawer_id: str,
+        wing: str,
+        room: str,
+        content: str,
+    ) -> None:
+        """Upsert a single drawer into the FTS5 index."""
+        await self.delete_drawers_fts([drawer_id])
+        sql = "INSERT INTO drawers_fts (id, wing, room, content) VALUES (?, ?, ?, ?)"
+        try:
+            await self._execute_raw(sql, [drawer_id, wing, room, content])
+        except Exception:
+            logger.debug("Failed to insert into drawers_fts", exc_info=True)
+
+    async def delete_drawers_fts(self, drawer_ids: List[str]) -> None:
+        """Remove drawers from the FTS5 index."""
+        if not drawer_ids:
+            return
+        placeholders = ",".join(["?"] * len(drawer_ids))
+        sql = f"DELETE FROM drawers_fts WHERE id IN ({placeholders})"
+        try:
+            await self._execute_raw(sql, drawer_ids)
+        except Exception:
+            logger.debug("Failed to delete from drawers_fts", exc_info=True)
+
+    async def delete_drawer_fts(self, drawer_id: str) -> None:
+        """Remove a single drawer from the FTS5 index."""
+        await self.delete_drawers_fts([drawer_id])
+
+    async def _batch_execute(self, statements: List[tuple[str, List[Any]]]) -> Any:
+        """Execute multiple SQL statements in batches of at most 100 statements."""
+        if not statements:
+            return []
+
+        MAX_D1_BATCH = 100
+        all_results = []
+        batch_fn = getattr(self.db, "batch", None)
+
+        for i in range(0, len(statements), MAX_D1_BATCH):
+            chunk = statements[i : i + MAX_D1_BATCH]
+            if batch_fn is not None:
+                prepared_stmts = []
+                for sql, params in chunk:
+                    stmt = self.db.prepare(sql)
+                    if params:
+                        stmt = bind_params(stmt, params)
+                    prepared_stmts.append(stmt)
+                res = batch_fn(prepared_stmts)
+                if hasattr(res, "__await__"):
+                    res = await res
+                all_results.append(res)
+            else:
+                for sql, params in chunk:
+                    all_results.append(await self._execute_raw(sql, params))
+
+        return all_results
+
+    async def batch_upsert_drawers_fts(
+        self,
+        drawers: List[Dict[str, str]],
+    ) -> int:
+        """Upsert a list of drawers into drawers_fts in a single batch."""
+        if not drawers:
+            return 0
+        stmts: List[tuple[str, List[Any]]] = []
+        for d in drawers:
+            stmts.append(("DELETE FROM drawers_fts WHERE id = ?", [d["id"]]))
+            stmts.append(
+                (
+                    "INSERT INTO drawers_fts (id, wing, room, content) VALUES (?, ?, ?, ?)",
+                    [
+                        d["id"],
+                        d.get("wing", "general"),
+                        d.get("room", "inbox"),
+                        d.get("content", ""),
+                    ],
+                )
+            )
+        await self._batch_execute(stmts)
+        return len(drawers)
+
+    async def search_fts(
+        self,
+        query: str,
+        wing: Optional[str] = None,
+        room: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Search drawers_fts using FTS5 trigram MATCH and return candidate dicts."""
+        tokens = [t for t in _FTS_TOKEN_RE.findall(query) if len(t) >= 3]
+        if not tokens:
+            return []
+        seen = set()
+        unique_tokens = [t for t in tokens if not (t in seen or seen.add(t))][:30]
+        if not unique_tokens:
+            return []
+        match_expr = " OR ".join('"' + t.replace('"', '""') + '"' for t in unique_tokens)
+
+        clauses = ["drawers_fts MATCH ?"]
+        params: List[Any] = [match_expr]
+        if wing:
+            clauses.append("wing = ?")
+            params.append(wing)
+        if room:
+            clauses.append("room = ?")
+            params.append(room)
+
+        sql = f"SELECT id, wing, room, content FROM drawers_fts WHERE {' AND '.join(clauses)} ORDER BY rank LIMIT ?"
+        params.append(limit)
+
+        try:
+            rows = await self._query_raw(sql, params)
+            return [
+                {
+                    "id": str(r["id"]),
+                    "wing": r.get("wing"),
+                    "room": r.get("room"),
+                    "content": r.get("content", ""),
+                }
+                for r in rows
+            ]
+        except Exception:
+            logger.debug("search_fts failed or drawers_fts not available", exc_info=True)
+            return []
 
     async def find_ids_by_source(self, source_file: str) -> List[str]:
         """Find all drawer IDs originating from a given source_file without deleting them."""

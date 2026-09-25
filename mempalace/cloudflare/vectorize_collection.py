@@ -92,7 +92,7 @@ class CloudflareVectorizeCollection:
         r2_tasks = [self.r2.put_drawer(did, doc) for did, doc in zip(ids, documents)]
         await asyncio.gather(*r2_tasks)
 
-        # 3. Upsert into D1 drawer registry
+        # 3. Upsert into D1 drawer registry and FTS5 index
         d1_tasks = []
         for did, doc, meta in zip(ids, documents, metas):
             wing = str(meta.get("wing", "general"))
@@ -111,6 +111,15 @@ class CloudflareVectorizeCollection:
                     source_file=src,
                 )
             )
+            if hasattr(self.d1, "upsert_drawer_fts"):
+                d1_tasks.append(
+                    self.d1.upsert_drawer_fts(
+                        drawer_id=did,
+                        wing=wing,
+                        room=room,
+                        content=doc,
+                    )
+                )
         await asyncio.gather(*d1_tasks)
 
         # 4. Upsert into Cloudflare Vectorize (batch size <= 500)
@@ -300,6 +309,8 @@ class CloudflareVectorizeCollection:
             if hasattr(res, "__await__"):
                 await res
         await self.d1.delete_drawers(target_ids)
+        if hasattr(self.d1, "delete_drawers_fts"):
+            await self.d1.delete_drawers_fts(target_ids)
         await self.r2.delete_drawers(target_ids)
 
     async def a_count(self) -> int:

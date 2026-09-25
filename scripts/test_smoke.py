@@ -30,6 +30,22 @@ def access_headers_from_env():
     if bool(client_id) != bool(secret):
         sys.exit(f"Set both {ACCESS_ENV[0]} and {ACCESS_ENV[1]}, or neither.")
     if not client_id:
+        mcp_cfg = os.path.expanduser("~/.cursor/mcp.json")
+        if os.path.exists(mcp_cfg):
+            try:
+                with open(mcp_cfg, "r") as f:
+                    data = json.load(f)
+                headers = (
+                    data.get("mcpServers", {})
+                    .get("mempalace-cloudflare", {})
+                    .get("headers", {})
+                )
+                cid = headers.get("CF-Access-Client-Id", "")
+                csec = headers.get("CF-Access-Client-Secret", "")
+                if cid and csec:
+                    return {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": csec}
+            except Exception:
+                pass
         return {}
     return {"CF-Access-Client-Id": client_id, "CF-Access-Client-Secret": secret}
 
@@ -68,7 +84,24 @@ def main():
     args = parser.parse_args()
 
     base_url = args.url.rstrip("/")
-    token = args.token or os.environ.get("MEMPALACE_API_KEY") or DEFAULT_LOCAL_TOKEN
+    token = args.token or os.environ.get("MEMPALACE_API_KEY")
+    if not token and base_url.startswith("https://"):
+        mcp_cfg = os.path.expanduser("~/.cursor/mcp.json")
+        if os.path.exists(mcp_cfg):
+            try:
+                with open(mcp_cfg, "r") as f:
+                    data = json.load(f)
+                auth = (
+                    data.get("mcpServers", {})
+                    .get("mempalace-cloudflare", {})
+                    .get("headers", {})
+                    .get("Authorization", "")
+                )
+                if auth.startswith("Bearer "):
+                    token = auth[7:].strip()
+            except Exception:
+                pass
+    token = token or DEFAULT_LOCAL_TOKEN
     access = access_headers_from_env()
 
     print(f"Running smoke test against: {base_url}")

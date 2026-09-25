@@ -65,11 +65,17 @@ class R2DrawerStorage:
         return str(obj)
 
     async def get_drawers(self, drawer_ids: List[str]) -> Dict[str, str]:
-        """Retrieve multiple verbatim drawers concurrently."""
+        """Retrieve multiple verbatim drawers concurrently with bounded concurrency."""
         if not drawer_ids:
             return {}
 
-        tasks = [self.get_drawer(did) for did in drawer_ids]
+        sem = asyncio.Semaphore(20)
+
+        async def _fetch(did: str) -> Optional[str]:
+            async with sem:
+                return await self.get_drawer(did)
+
+        tasks = [_fetch(did) for did in drawer_ids]
         contents = await asyncio.gather(*tasks)
 
         result: Dict[str, str] = {}
