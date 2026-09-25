@@ -23,8 +23,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ACCESS_ENV = ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET")
 USER_AGENT = "mempalace-backfill-fts"
-MAX_RETRIES = 5
-RETRY_DELAY_SEC = 2.0
+MAX_RETRIES = 8
+RETRY_DELAY_SEC = 3.0
 
 
 def access_headers_from_env() -> Dict[str, str]:
@@ -95,7 +95,7 @@ def post_backfill_batch(
                 err_data = json.loads(raw)
             except Exception:
                 err_data = {"raw": raw[:300]}
-            if e.code in (502, 503, 504, 429) and attempt < MAX_RETRIES:
+            if e.code in (500, 502, 503, 504, 429) and attempt < MAX_RETRIES:
                 sleep_time = RETRY_DELAY_SEC * (2 ** (attempt - 1))
                 print(
                     f"HTTP {e.code} on attempt {attempt}/{MAX_RETRIES}, retrying in {sleep_time:.1f}s...",
@@ -286,22 +286,34 @@ def main() -> None:
 
     access_headers = access_headers_from_env()
     batch_size = max(1, min(args.batch, 200))
-    num_workers = max(1, args.workers)
 
-    boundaries = get_partition_boundaries(num_workers)
-    actual_workers = len(boundaries) - 1
+    # Boundary definitions must always match the original 4 partitions
+    # when existing partition checkpoints are present.
+    original_partitions = 4
+    boundaries = get_partition_boundaries(original_partitions)
+    num_partitions = len(boundaries) - 1
+    existing_ckpts = [
+        os.path.exists(f"scripts/.fts_backfill_cursor_{w}") for w in range(num_partitions)
+    ]
+
+    active_partitions = [w for w in range(num_partitions) if existing_ckpts[w]]
+    if not active_partitions:
+        # Fresh start across all partitions
+        active_partitions = list(range(num_partitions))
+
+    max_concurrency = min(len(active_partitions), max(1, args.workers))
     print(
-        f"Starting FTS5 backfill with {actual_workers} workers (batch size: {batch_size})",
+        f"Starting FTS5 backfill across {len(active_partitions)} partitions with concurrency {max_concurrency} (batch size: {batch_size})",
         flush=True,
     )
 
     t0 = time.time()
     total_indexed = 0
 
-    with ThreadPoolExecutor(max_workers=actual_workers) as executor:
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
         futures = []
-        for w in range(actual_workers):
-            start_cur = boundaries[w]
+        for w in active_partitions:
+            start_cur = boundaries[w] if not existing_ckpts[w] else None
             end_cur = boundaries[w + 1]
             ckpt = f"scripts/.fts_backfill_cursor_{w}"
             futures.append(
