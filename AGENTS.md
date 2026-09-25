@@ -102,7 +102,8 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 
 - Cloudflare-native MemPalace v1 is deployed behind Cloudflare Access and passing the live smoke test (Access 403 without the service token, then healthz, 401, status, 25 MCP tools).
 - Hardened ASGI entrypoint: constant-time `hmac.compare_digest` on bearer tokens, generic 500 responses with request correlation IDs, validated and clamped paging (`MAX_PAGE_LIMIT = 100`) on REST and MCP tools, and Workers observability enabled.
-- The Cloudflare palace holds the full local palace import: 55,705 drawers across 52 wings and 1,682 rooms (D1 registry and Vectorize counts match the local Chroma count). A random sample of 40 drawers matched verbatim and all 40 ranked in the top 10 for their own opening words. The local palace was read only. Closets (`mempalace_closets`) and the local knowledge graph were not imported.
+- The Cloudflare palace holds two machines' palaces: 138,881 drawers across 68 wings and 2,075 rooms (D1 registry and Vectorize counts match). 55,705 came from the maintainer's Mac and 83,176 from a second machine (imported from a SQLite `.backup` snapshot so its live palace stayed read only). The two sets share no drawer ids or wings; 88 of its drawers repeat text already present under another id and were imported as-is. Random 40-drawer samples from each source matched verbatim. Closets (`mempalace_closets`) and the knowledge graphs were not imported.
+- Known constraint: search recall on code and log fragments. `search.py` re-ranks only the top `min(50, max(20, 2 × n_results))` Vectorize candidates, with no corpus-wide lexical path. In the second machine's sample, 32/40 drawers ranked in the top 10 for their own opening 15 words; the 8 misses are mid-word 800-char chunks of JSON, Go code or download logs. Querying with each missed drawer's full text ranks it first, so the stored vectors are correct.
 - The account runs on Workers Paid ($5/month). The full palace exceeds the Free plan (Vectorize 5M stored dimensions, D1 100k row writes/day, 10 ms CPU per request).
 - 43/43 Cloudflare tests pass (adapters, entrypoint, MCP protocol, client plugin, verbatim fidelity, hardening, config resolution, batch import).
 - Known constraint: `uv.lock` is stale upstream (`pyproject.toml` pins ruff 0.16.6, lock says 0.16.1), so `uv run` rewrites it locally. Leave it out of fork commits until upstream brings a fresh lock.
@@ -123,10 +124,12 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 - [x] Security hardening: `hmac.compare_digest`, generic 500 with request id, clamped paging, Workers observability
 - [x] Verified Cursor client configuration in `~/.cursor/mcp.json`
 - [x] Imported the local palace (55,705 drawers) with local bge-small embeddings, 0 Workers AI neurons. 34,232 drawer ids exceed Vectorize's 64-byte id limit; those use a sha256 vector key while D1 and R2 keep the original id. On the Free plan the importer needs `--batch 5` (CPU limit, error 1102); the default of 20 is for Paid.
+- [x] Imported a second machine's palace (83,176 drawers) with `--palace <snapshot dir> --progress <separate file>`, about 2.5 hours, no retries.
 
 ## Open TODOs
 
 - [ ] Decide whether to import the local knowledge graph (SQLite) into D1 and the closets (`mempalace_closets`, ~1.8k).
+- [ ] Close the search recall gap on code/log fragments (see Known constraint), for example a corpus-wide lexical index in D1 merged with the Vectorize candidates.
 
 ## Future Roadmap (v2 / Post-v1)
 
