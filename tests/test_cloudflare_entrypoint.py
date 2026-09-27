@@ -173,7 +173,55 @@ def test_mcp_initialize_and_tool_list():
         assert "mempalace_search" in tool_names
         assert "mempalace_kg_add" in tool_names
         assert "mempalace_get_taxonomy" in tool_names
-        assert len(tools) >= 24
+        assert len(tools) == 25
+
+        # Verify read-only annotations and search scoping
+        tools_by_name = {t["name"]: t for t in tools}
+        expected_read_only = {
+            "mempalace_status",
+            "mempalace_list_wings",
+            "mempalace_list_rooms",
+            "mempalace_get_taxonomy",
+            "mempalace_get_aaak_spec",
+            "mempalace_search",
+            "mempalace_check_duplicate",
+            "mempalace_get_drawer",
+            "mempalace_get_drawers",
+            "mempalace_list_drawers",
+            "mempalace_diary_read",
+            "mempalace_memories_filed_away",
+            "mempalace_kg_query",
+            "mempalace_kg_timeline",
+            "mempalace_kg_stats",
+        }
+        expected_write = {
+            "mempalace_add_drawer",
+            "mempalace_checkpoint",
+            "mempalace_update_drawer",
+            "mempalace_delete_drawer",
+            "mempalace_delete_drawers",
+            "mempalace_delete_by_source",
+            "mempalace_diary_write",
+            "mempalace_kg_add",
+            "mempalace_kg_invalidate",
+            "mempalace_kg_supersede",
+        }
+
+        for name in expected_read_only:
+            assert tools_by_name[name].get("readOnlyHint") is True, (
+                f"{name} must declare readOnlyHint: True"
+            )
+
+        for name in expected_write:
+            assert "readOnlyHint" not in tools_by_name[name], (
+                f"{name} is a write tool and must not declare readOnlyHint"
+            )
+
+        search_tool = tools_by_name["mempalace_search"]
+        assert "past-session memories" in search_tool["description"]
+        assert "current conversation" in search_tool["description"]
+        # Sagittarius pruneToolSchemas budget is 200 runes
+        assert len(search_tool["description"]) <= 200
 
     asyncio.run(_test())
 

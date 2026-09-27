@@ -143,14 +143,17 @@ class CloudflarePalaceTools:
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Return MCP tool definitions list."""
-        return [
-            {
+        definitions = []
+        for name, spec in self._tools_registry().items():
+            defn: Dict[str, Any] = {
                 "name": name,
                 "description": spec["description"],
                 "inputSchema": spec["input_schema"],
             }
-            for name, spec in self._tools_registry().items()
-        ]
+            if spec.get("read_only"):
+                defn["readOnlyHint"] = True
+            definitions.append(defn)
+        return definitions
 
     async def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
         """Execute a tool by name with arguments."""
@@ -170,11 +173,13 @@ class CloudflarePalaceTools:
                 "description": "Palace overview — total drawers, wing and room counts",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_status,
+                "read_only": True,
             },
             "mempalace_list_wings": {
                 "description": "List all wings with drawer counts",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_list_wings,
+                "read_only": True,
             },
             "mempalace_list_rooms": {
                 "description": "List rooms within a wing (or all rooms if no wing given)",
@@ -188,19 +193,26 @@ class CloudflarePalaceTools:
                     },
                 },
                 "handler": self.tool_list_rooms,
+                "read_only": True,
             },
             "mempalace_get_taxonomy": {
                 "description": "Full taxonomy: wing → room → drawer count",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_get_taxonomy,
+                "read_only": True,
             },
             "mempalace_get_aaak_spec": {
                 "description": "Get the AAAK dialect specification — the compressed memory format MemPalace uses.",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_get_aaak_spec,
+                "read_only": True,
             },
             "mempalace_search": {
-                "description": "Semantic and keyword search over memories. Returns matching drawers.",
+                "description": (
+                    "Search past-session memories. Returns matching drawers. "
+                    "Not for the current conversation — if it happened in this session, "
+                    "answer from context instead."
+                ),
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -215,6 +227,7 @@ class CloudflarePalaceTools:
                     "required": ["query"],
                 },
                 "handler": self.tool_search,
+                "read_only": True,
             },
             "mempalace_check_duplicate": {
                 "description": "Check if similar content already exists before saving to avoid duplicate drawers.",
@@ -237,6 +250,7 @@ class CloudflarePalaceTools:
                     "required": ["content"],
                 },
                 "handler": self.tool_check_duplicate,
+                "read_only": True,
             },
             "mempalace_add_drawer": {
                 "description": "Add a new memory drawer. Saves verbatim text to the specified wing and room.",
@@ -296,6 +310,7 @@ class CloudflarePalaceTools:
                     "required": ["drawer_id"],
                 },
                 "handler": self.tool_get_drawer,
+                "read_only": True,
             },
             "mempalace_get_drawers": {
                 "description": "Retrieve full verbatim text of multiple drawers by IDs.",
@@ -307,6 +322,7 @@ class CloudflarePalaceTools:
                     "required": ["drawer_ids"],
                 },
                 "handler": self.tool_get_drawers,
+                "read_only": True,
             },
             "mempalace_list_drawers": {
                 "description": "List drawers in a room or wing with pagination.",
@@ -327,6 +343,7 @@ class CloudflarePalaceTools:
                     },
                 },
                 "handler": self.tool_list_drawers,
+                "read_only": True,
             },
             "mempalace_update_drawer": {
                 "description": "Update the content, wing, or room of an existing drawer.",
@@ -408,11 +425,13 @@ class CloudflarePalaceTools:
                     },
                 },
                 "handler": self.tool_diary_read,
+                "read_only": True,
             },
             "mempalace_memories_filed_away": {
                 "description": "Check what memories have been filed recently.",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_memories_filed_away,
+                "read_only": True,
             },
             "mempalace_kg_query": {
                 "description": "Query the knowledge graph for an entity's relationships.",
@@ -432,6 +451,7 @@ class CloudflarePalaceTools:
                     "required": ["entity"],
                 },
                 "handler": self.tool_kg_query,
+                "read_only": True,
             },
             "mempalace_kg_add": {
                 "description": "Add a fact triple to the knowledge graph (subject → predicate → object).",
@@ -498,11 +518,13 @@ class CloudflarePalaceTools:
                     },
                 },
                 "handler": self.tool_kg_timeline,
+                "read_only": True,
             },
             "mempalace_kg_stats": {
                 "description": "Knowledge graph summary statistics.",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_kg_stats,
+                "read_only": True,
             },
         }
 
