@@ -11,6 +11,7 @@ Supported:
     - Cursor IDE agent JSONL (~/.cursor/projects/<proj>/agent-transcripts/)
     - OpenAI Codex CLI JSONL
     - Gemini CLI JSONL (~/.gemini/tmp/<project_hash>/chats/session-*.jsonl)
+    - Sagittarius JSONL (~/.sagittarius/tmp/<project>/chats/session-*.jsonl)
     - Pi agent JSONL
     - Gemini CLI / Google AI Studio JSON sessions (contents / messages / flat list)
     - Continue.dev session JSON (~/.continue/sessions/*.json)
@@ -273,6 +274,10 @@ def _try_normalize_json_split(content: str) -> Optional[list]:
             )
 
     normalized = _try_gemini_jsonl(content)
+    if normalized:
+        return [normalized]
+
+    normalized = _try_sagittarius_jsonl(content)
     if normalized:
         return [normalized]
 
@@ -564,6 +569,73 @@ def _try_gemini_jsonl(content: str) -> Optional[str]:
             messages.append(("assistant", joined))
 
     if len(messages) >= 2 and has_session_metadata:
+        return _messages_to_transcript(messages)
+    return None
+
+
+def _try_sagittarius_jsonl(content: str) -> Optional[str]:
+    """Sagittarius sessions (~/.sagittarius/tmp/<project>/chats/session-*.jsonl).
+
+    Sagittarius is a Go port of gemini-cli, so its records look similar —
+    ``{"type": "user", "content": [{"text": "..."}]}`` and
+    ``{"type": "gemini", "content": [...]}`` — but it never emits the
+    ``session_metadata`` sentinel the Gemini parser requires. Its first
+    line is instead a session header like
+    ``{"sessionId": "...", "projectHash": "...", "kind": "main"}``,
+    interleaved with ``{"$set": {...}}`` metadata updates.
+
+    Detection requires that sessionId header, so this parser never claims
+    gemini-cli, Claude Code, Cursor, or Codex transcripts. Tool traffic is
+    dropped: ``functionCall`` blocks (agent tool invocations) and
+    ``functionResponse`` blocks (tool results recorded with the user role)
+    carry no human speech, so only ``text`` blocks become messages.
+    """
+    lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+    messages = []
+    has_session_header = False
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+
+        if "sessionId" in entry and ("kind" in entry or "projectHash" in entry):
+            has_session_header = True
+            continue
+
+        # Discard everything until the session header sentinel, mirroring
+        # the Gemini parser's session_metadata gate.
+        if not has_session_header:
+            continue
+
+        entry_type = entry.get("type", "")
+        if entry_type not in ("user", "gemini"):
+            # Skips $set updates and any other harness records.
+            continue
+
+        content_blocks = entry.get("content", [])
+        if not isinstance(content_blocks, list):
+            continue
+
+        parts = []
+        for block in content_blocks:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text", "")
+            if isinstance(text, str) and text.strip():
+                parts.append(text)
+        if not parts:
+            continue
+        joined = "\n".join(parts)
+
+        if entry_type == "user":
+            messages.append(("user", joined))
+        else:  # "gemini"
+            messages.append(("assistant", joined))
+
+    if len(messages) >= 2 and has_session_header:
         return _messages_to_transcript(messages)
     return None
 

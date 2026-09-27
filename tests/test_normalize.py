@@ -16,6 +16,7 @@ from mempalace.normalize import (
     _try_cursor_jsonl,
     _try_gemini_json,
     _try_gemini_jsonl,
+    _try_sagittarius_jsonl,
     _try_continue_json,
     _try_normalize_json,
     _try_normalize_json_split,
@@ -2284,3 +2285,117 @@ def test_claude_code_jsonl_does_not_claim_cursor():
     split = _try_normalize_json_split(blob)
     assert split is not None
     assert "Q" in split[0]
+
+
+def _sagittarius_header(session="sagittarius-1", project="abc123"):
+    return json.dumps(
+        {
+            "sessionId": session,
+            "projectHash": project,
+            "startTime": "2026-09-05T01:51:25.535697Z",
+            "lastUpdated": "2026-09-05T01:51:25.535697Z",
+            "kind": "main",
+        }
+    )
+
+
+def _sagittarius_line(entry_type, *blocks):
+    return json.dumps(
+        {
+            "id": "00000000-0000-4000-8000-000000000000",
+            "timestamp": "2026-09-05T02:12:24.165008Z",
+            "type": entry_type,
+            "content": list(blocks),
+        }
+    )
+
+
+def test_sagittarius_jsonl_parses_user_and_assistant_text():
+    lines = [
+        _sagittarius_header(),
+        _sagittarius_line("user", {"text": "Help me learn 68000 assembly."}),
+        _sagittarius_line("gemini", {"text": "Start with move.l and addressing modes."}),
+        json.dumps({"$set": {"lastUpdated": "2026-09-05T02:12:27.976462Z"}}),
+    ]
+    result = _try_sagittarius_jsonl("\n".join(lines))
+    assert result is not None
+    assert "Help me learn 68000 assembly." in result
+    assert "Start with move.l and addressing modes." in result
+    assert "$set" not in result
+    assert "sessionId" not in result
+
+
+def test_sagittarius_jsonl_drops_tool_calls_and_tool_results():
+    lines = [
+        _sagittarius_header(),
+        _sagittarius_line("user", {"text": "List the directory."}),
+        _sagittarius_line("gemini", {"functionCall": {"id": "call_1", "name": "list_directory"}}),
+        _sagittarius_line(
+            "user",
+            {"functionResponse": {"id": "call_1", "name": "list_directory"}},
+        ),
+        _sagittarius_line("gemini", {"text": "The directory is empty."}),
+    ]
+    result = _try_sagittarius_jsonl("\n".join(lines))
+    assert result is not None
+    assert "List the directory." in result
+    assert "The directory is empty." in result
+    assert "functionCall" not in result
+    assert "functionResponse" not in result
+    assert "list_directory" not in result
+
+
+def test_sagittarius_jsonl_requires_header_and_two_messages():
+    header_only = _sagittarius_header()
+    assert _try_sagittarius_jsonl(header_only) is None
+
+    one_turn = "\n".join(
+        [
+            _sagittarius_header(),
+            _sagittarius_line("user", {"text": "Only one turn so far."}),
+        ]
+    )
+    assert _try_sagittarius_jsonl(one_turn) is None
+
+    noise_only = "\n".join(
+        [
+            _sagittarius_header(),
+            _sagittarius_line(
+                "gemini", {"functionCall": {"id": "call_1", "name": "list_directory"}}
+            ),
+        ]
+    )
+    assert _try_sagittarius_jsonl(noise_only) is None
+
+
+def test_sagittarius_jsonl_does_not_claim_other_harnesses():
+    gemini_cli = "\n".join(
+        [
+            json.dumps({"type": "session_metadata", "sessionId": "x"}),
+            _sagittarius_line("user", {"text": "Q"}),
+            _sagittarius_line("gemini", {"text": "A"}),
+        ]
+    )
+    assert _try_sagittarius_jsonl(gemini_cli) is None
+    assert _try_gemini_jsonl(gemini_cli) is not None
+
+    claude = "\n".join(
+        [
+            json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "Q"}]}}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "A"}]},
+                }
+            ),
+        ]
+    )
+    assert _try_sagittarius_jsonl(claude) is None
+
+    cursor = "\n".join(
+        [
+            _cursor_line("user", {"type": "text", "text": "<user_query>Q</user_query>"}),
+            _cursor_line("assistant", {"type": "text", "text": "A"}),
+        ]
+    )
+    assert _try_sagittarius_jsonl(cursor) is None
