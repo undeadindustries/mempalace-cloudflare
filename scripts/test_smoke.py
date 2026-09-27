@@ -35,11 +35,10 @@ def access_headers_from_env():
             try:
                 with open(mcp_cfg, "r") as f:
                     data = json.load(f)
-                headers = (
-                    data.get("mcpServers", {})
-                    .get("mempalace-cloudflare", {})
-                    .get("headers", {})
-                )
+                server_cfg = data.get("mcpServers", {}).get("mempalace") or data.get(
+                    "mcpServers", {}
+                ).get("mempalace-cloudflare", {})
+                headers = server_cfg.get("headers", {})
                 cid = headers.get("CF-Access-Client-Id", "")
                 csec = headers.get("CF-Access-Client-Secret", "")
                 if cid and csec:
@@ -91,12 +90,10 @@ def main():
             try:
                 with open(mcp_cfg, "r") as f:
                     data = json.load(f)
-                auth = (
-                    data.get("mcpServers", {})
-                    .get("mempalace-cloudflare", {})
-                    .get("headers", {})
-                    .get("Authorization", "")
-                )
+                server_cfg = data.get("mcpServers", {}).get("mempalace") or data.get(
+                    "mcpServers", {}
+                ).get("mempalace-cloudflare", {})
+                auth = server_cfg.get("headers", {}).get("Authorization", "")
                 if auth.startswith("Bearer "):
                     token = auth[7:].strip()
             except Exception:
@@ -140,7 +137,12 @@ def main():
     assert status == 200, f"Expected 200, got {status}: {res}"
     tools = res.get("result", {}).get("tools", [])
     assert len(tools) >= 24, f"Expected >= 24 tools, got {len(tools)}"
-    print(f"OK ({len(tools)} tools discovered)")
+    hinted = [t["name"] for t in tools if t.get("readOnlyHint")]
+    assert len(hinted) == 15, f"Expected 15 readOnlyHint tools, got {len(hinted)}"
+    search_desc = next(t["description"] for t in tools if t["name"] == "mempalace_search")
+    assert "past-session memories" in search_desc
+    assert len(search_desc) <= 200
+    print(f"OK ({len(tools)} tools discovered, {len(hinted)} read-only hinted)")
 
     print("==> All smoke checks passed successfully!")
 
