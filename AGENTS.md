@@ -130,6 +130,7 @@ These live on the maintainers' machines, not in the repo. Use them when present.
 - [/] Importing a third machine's palace (42,978 drawers) with `--palace /tmp/5090s-palace --progress ~/.mempalace/cloudflare-import-progress-5090s.json --resume`.
 - [x] D1 FTS5 trigram candidate union (`migrations/0003_fts.sql`, `d1_registry.py`, `search.py`, `vectorize_collection.py`, `scripts/backfill_d1_fts.py`) to close the search recall gap on code snippets, log fragments, and exact identifiers.
 - [x] Sagittarius hooks (`hooks/sagittarius/`: AfterAgent/SessionStart/PreCompress/SessionEnd, wing inference from `cwd`, stateless `turn_index` gating, single-file mines) + `_try_sagittarius_jsonl` parser. Live-wired into `~/.sagittarius/settings.json` (retired `mempal-autosave.sh`/`mempal-drain.sh` wiring and the broken harness-based session-end).
+- [x] Scoped `mempalace_search` description to past sessions (<200 runes) and annotated 15 read-only tools with `readOnlyHint: true` for Sagittarius AD-133 trust mode admission. Deployed and verified via smoke test.
 
 ## Open TODOs
 
