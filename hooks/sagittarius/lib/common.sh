@@ -118,14 +118,23 @@ except Exception:
 
 # ── Save interval ─────────────────────────────────────────────────────
 #
-# Coerce empty, non-numeric, AND zero to the default: INTERVAL=0 would
-# crash bash on the modulo check ($((TURN % 0)) is "division by 0").
+# Reads MEMPAL_SAVE_INTERVAL from the environment, floors to >= 1 and
+# coerces empty, non-numeric, or zero to the default (15).
+# Strips leading zeros so bash arithmetic ($((TURN % INTERVAL))) does
+# not treat tokens like `08` or `09` as invalid octal or `010` as 8.
 mempal_save_interval() {
     local raw="${MEMPAL_SAVE_INTERVAL:-15}"
     case "$raw" in
-        ''|*[!0-9]*|0) printf '15' ;;
-        *) printf '%s' "$raw" ;;
+        ''|*[!0-9]*) printf '15'; return 0 ;;
     esac
+    while [ "${raw}" != "${raw#0}" ] && [ "${#raw}" -gt 1 ]; do
+        raw="${raw#0}"
+    done
+    if [ "$raw" -lt 1 ] 2>/dev/null; then
+        printf '15'
+        return 0
+    fi
+    printf '%s' "$raw"
 }
 
 # ── Stdin parser ──────────────────────────────────────────────────────

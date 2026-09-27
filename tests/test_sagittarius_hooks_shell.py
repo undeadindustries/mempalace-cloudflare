@@ -286,6 +286,19 @@ def test_save_interval_zero_floors_to_default(tmp_path: Path) -> None:
     assert proc.stdout.strip() == "{}"
 
 
+def test_save_interval_leading_zero_not_parsed_as_octal(tmp_path: Path) -> None:
+    """MEMPAL_SAVE_INTERVAL=08 must not crash bash arithmetic on octal evaluation."""
+    proc = _run_hook(
+        SAVE_HOOK,
+        _payload(turn_index=7),
+        tmp_path / "s",
+        tmp_path / "h",
+        extra_env={"MEMPAL_SAVE_INTERVAL": "08"},
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "{}"
+
+
 # ── SessionStart drain ────────────────────────────────────────────────
 
 
@@ -442,3 +455,18 @@ def test_transcript_validation(tmp_path: Path) -> None:
         tmp_path,
     ).splitlines()
     assert out == ["ok1", "bad1", "bad2", "bad3"]
+
+
+def test_save_interval_unit_cases(tmp_path: Path) -> None:
+    out = _bash_common(
+        'MEMPAL_SAVE_INTERVAL="" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="0" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="08" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="09" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="015" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="00" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="notanumber" mempal_save_interval; echo;'
+        'MEMPAL_SAVE_INTERVAL="20" mempal_save_interval; echo',
+        tmp_path,
+    ).splitlines()
+    assert out == ["15", "15", "8", "9", "15", "15", "15", "20"]
