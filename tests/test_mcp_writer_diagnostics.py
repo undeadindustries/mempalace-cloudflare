@@ -80,6 +80,26 @@ def test_status_reports_read_only_peer_holder(isolated_writer, monkeypatch):
     assert status["holder"] == "PID 42 (mempalace-mcp)"
 
 
+def test_holder_regex_handles_semicolons_in_palace_path(isolated_writer, monkeypatch):
+    def busy(*args, **kwargs):
+        raise palace.MineAlreadyRunning(
+            "palace /home/user/my;evil-suffix-that-should-not-be-lost is held by "
+            "PID 7 (mempalace mine /home/user/my;evil-suffix-that-should-not-be-lost); "
+            "wait for it to finish or stop the holder before retrying"
+        )
+
+    monkeypatch.setattr(palace, "mine_palace_lock", busy)
+    result = mcp._mcp_peer_writer_refusal(1, "mempalace_add_drawer")
+    error = result["error"]
+    assert "Peer MCP writer active" in error["message"]
+    assert error["data"]["holder"] == (
+        "PID 7 (mempalace mine /home/user/my;evil-suffix-that-should-not-be-lost)"
+    )
+    assert mcp._MCP_WRITER_HOLDER == (
+        "PID 7 (mempalace mine /home/user/my;evil-suffix-that-should-not-be-lost)"
+    )
+
+
 def test_lock_setup_error_does_not_claim_contention(isolated_writer, monkeypatch):
     def denied(*args, **kwargs):
         raise PermissionError("synthetic permission failure")

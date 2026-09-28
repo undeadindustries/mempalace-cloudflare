@@ -228,7 +228,7 @@ _PEER_WRITER_HINT = (
     "Stop the holder, or run one hub (`mempalace serve`) so stdio sessions "
     "proxy instead of competing for the writer lease."
 )
-_HELD_BY_RE = re.compile(r"is held by (.+?)(?:;|$)")
+_HELD_BY_RE = re.compile(r"is held by (.+?)(?:; wait\b.*|$)")
 
 _MUTATING_TOOLS = frozenset(
     {
