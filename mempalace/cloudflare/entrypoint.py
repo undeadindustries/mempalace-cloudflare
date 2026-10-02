@@ -242,6 +242,16 @@ class CloudflareMemPalaceApp:
             await self._send_json(send, status_code, res)
             return
 
+        if path == "/api/transcripts" and method == "POST":
+            res = await tools.tool_ingest_transcript(
+                wing=body_json.get("wing"),
+                source_file=body_json.get("source_file"),
+                transcript=body_json.get("transcript"),
+            )
+            status_code = res.pop("http_status", 400) if "error" in res else 200
+            await self._send_json(send, status_code, res)
+            return
+
         if path == "/api/backfill/fts" and method == "POST":
             await self._handle_backfill_fts(send, body_json, tools)
             return

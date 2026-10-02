@@ -45,10 +45,21 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
 MAX_PAGE_LIMIT = 100
 MAX_BATCH_DRAWERS = 100
+# Each stored drawer costs R2, D1 and FTS subrequests, and Workers cap a single
+# invocation at 1000 on the Paid plan. 100 drawers stays far below that; callers
+# resume from ``remaining`` instead of one request trying to file everything.
+MAX_NEW_CHUNKS_PER_REQUEST = 100
+# D1 allows 100 bound parameters per statement, so existence checks go in pages.
+D1_MAX_BOUND_PARAMS = 100
+MAX_TRANSCRIPT_BYTES = 25 * 1024 * 1024
+HTTP_BAD_REQUEST = 400
+HTTP_PAYLOAD_TOO_LARGE = 413
 
 try:
+    from .transcripts import build_drawers, validate_wing
     from .workers_ai import EMBEDDING_DIMENSION
 except (ImportError, ValueError):
+    from transcripts import build_drawers, validate_wing  # type: ignore
     from workers_ai import EMBEDDING_DIMENSION  # type: ignore
 
 
@@ -665,6 +676,70 @@ class CloudflarePalaceTools:
             "drawer_ids": ids,
             "embedded_by": "client" if embeddings is not None else "workers_ai",
         }
+
+    async def tool_ingest_transcript(
+        self, wing: object, source_file: object, transcript: object
+    ) -> Dict[str, Any]:
+        """File a Cursor transcript as verbatim drawers, skipping what is already filed.
+
+        Why it works this way: the uploading hook cannot know which exchanges
+        the palace already holds, and transcripts only ever grow. Ids are
+        derived from position and content, so re-uploading the whole file is
+        safe and only new exchanges cost embeddings. The per-request cap keeps
+        one call inside the Worker subrequest limit; ``remaining`` tells the
+        caller to repeat the identical request until it reaches 0.
+
+        Failure model: R2, D1 and Vectorize writes happen inside one
+        ``tool_add_drawers`` call. If it raises, nothing is reported as stored
+        and the next identical upload retries the same chunks. A crash after
+        the D1 row but before the vector leaves the drawer findable by exact
+        text (FTS) but not by meaning; ``add_drawer`` has the same window.
+        """
+        problem = validate_wing(wing)
+        if problem:
+            return {"error": problem, "http_status": HTTP_BAD_REQUEST}
+        if not isinstance(source_file, str) or not source_file:
+            return {
+                "error": "source_file must be a non-empty string",
+                "http_status": HTTP_BAD_REQUEST,
+            }
+        if not isinstance(transcript, str) or not transcript:
+            return {
+                "error": "transcript must be a non-empty string",
+                "http_status": HTTP_BAD_REQUEST,
+            }
+        if len(transcript.encode("utf-8")) > MAX_TRANSCRIPT_BYTES:
+            return {
+                "error": f"transcript exceeds {MAX_TRANSCRIPT_BYTES} bytes",
+                "http_status": HTTP_PAYLOAD_TOO_LARGE,
+            }
+
+        drawers = build_drawers(str(wing), source_file, transcript)
+        filed_ids = await self._existing_drawer_ids([d["id"] for d in drawers])
+        pending = [d for d in drawers if d["id"] not in filed_ids]
+        batch = pending[:MAX_NEW_CHUNKS_PER_REQUEST]
+
+        stored_ids: List[str] = []
+        if batch:
+            result = await self.tool_add_drawers(batch)
+            if "error" in result:
+                return result
+            stored_ids = result["drawer_ids"]
+        return {
+            "parsed_chunks": len(drawers),
+            "already_filed": len(drawers) - len(pending),
+            "stored": len(stored_ids),
+            "remaining": len(pending) - len(batch),
+            "drawer_ids": stored_ids,
+        }
+
+    async def _existing_drawer_ids(self, drawer_ids: List[str]) -> set:
+        """Return which of ``drawer_ids`` are already in the registry."""
+        found: set = set()
+        for start in range(0, len(drawer_ids), D1_MAX_BOUND_PARAMS):
+            rows = await self.reg.get_drawers(drawer_ids[start : start + D1_MAX_BOUND_PARAMS])
+            found.update(row["id"] for row in rows)
+        return found
 
     async def tool_checkpoint(self, drawers: List[Dict[str, str]]) -> Dict[str, Any]:
         stored_ids = []
