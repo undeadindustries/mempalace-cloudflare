@@ -138,6 +138,15 @@ def test_client_resolves_settings_from_config_json(monkeypatch, tmp_path, no_acc
     assert captured[0].get_header("Cf-access-client-secret") == "cfg.secret"
 
 
+def test_read_config_dict_honours_mempalace_config_dir(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"cloudflare_url": "http://dir-worker"}))
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path))
+
+    from mempalace_cloudflare_remote import _read_config_dict
+
+    assert _read_config_dict() == {"cloudflare_url": "http://dir-worker"}
+
+
 def test_client_env_overrides_config_json(monkeypatch, tmp_path, no_access_env):
     mock_cfg = tmp_path / "config.json"
     mock_cfg.write_text(

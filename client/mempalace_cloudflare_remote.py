@@ -30,9 +30,19 @@ ACCESS_CLIENT_SECRET_ENV = "CF_ACCESS_CLIENT_SECRET"
 _HTTP_FORBIDDEN = 403
 
 
+CONFIG_DIR_ENV = "MEMPALACE_CONFIG_DIR"
+
+
 def _read_config_dict() -> Dict[str, Any]:
-    """Safely read ~/.mempalace/config.json if it exists."""
-    cfg_path = os.path.expanduser("~/.mempalace/config.json")
+    """Safely read config.json from the directory the engine itself uses.
+
+    The engine resolves its config directory from MEMPALACE_CONFIG_DIR first, so
+    the plugin must too: otherwise a process pointed at a dedicated config dir
+    (for example a hook that must target Cloudflare while other tools keep a
+    local palace) selects this backend but silently misses its URL and token.
+    """
+    config_dir = os.environ.get(CONFIG_DIR_ENV, "").strip() or "~/.mempalace"
+    cfg_path = os.path.join(os.path.expanduser(config_dir), "config.json")
     try:
         if os.path.isfile(cfg_path):
             with open(cfg_path, "r", encoding="utf-8") as f:
