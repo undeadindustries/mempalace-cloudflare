@@ -775,6 +775,7 @@ def tool_mine(
     limit: int = 0,
     dry_run: bool = False,
     extract: str = "exchange",
+    include_ignored: Optional[list[str]] = None,
 ):
     """Mine a directory into the palace — the MCP equivalent of ``mempalace mine``.
 
@@ -795,6 +796,8 @@ def tool_mine(
     dry_run: walk + chunk and report, but file nothing.
     extract: convos extraction strategy — ``"exchange"`` (default) or
              ``"general"``; ignored by the other modes.
+    include_ignored: project-relative paths to scan even if ignored, matching
+                     the CLI's ``--include-ignored``; projects mode only.
 
     Runs synchronously and mirrors the :func:`tool_sync` contract: success
     returns ``{success: True, mode, dry_run, output[, output_truncated]}`` where ``output`` is
@@ -817,6 +820,22 @@ def tool_mine(
         return {
             "success": False,
             "error": f"invalid mode '{mode}'; expected one of: {', '.join(valid_modes)}",
+        }
+
+    if include_ignored is not None and (
+        not isinstance(include_ignored, list)
+        or any(not isinstance(path, str) or not path.strip() for path in include_ignored)
+    ):
+        return {
+            "success": False,
+            "error": "include_ignored must be an array of non-empty project-relative path strings",
+            "error_class": "ValueError",
+        }
+    if include_ignored and mode != "projects":
+        return {
+            "success": False,
+            "error": "include_ignored is supported only in projects mode",
+            "error_class": "ValueError",
         }
 
     src = os.path.expanduser(source) if source else ""
@@ -864,6 +883,7 @@ def tool_mine(
             agent=agent,
             limit=limit,
             dry_run=dry_run,
+            **({"include_ignored": include_ignored} if include_ignored else {}),
         )
 
     try:
@@ -1349,7 +1369,11 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
                 wing = sanitize_name(wing, "wing")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
-            if wing.lower() != str(old_meta.get("wing") or "").lower():
+            # Case-sensitive comparison: a case-only rename IS a rename.
+            # ``list_drawers`` is case-sensitive, so case-duplicate wings are
+            # distinct destinations, and the caller's exact casing is
+            # authoritative (#2395).
+            if wing != str(old_meta.get("wing") or ""):
                 new_meta["wing"] = wing
 
         if room is not None:
@@ -1357,7 +1381,7 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
                 room = sanitize_name(room, "room")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
-            if room.lower() != str(old_meta.get("room") or "").lower():
+            if room != str(old_meta.get("room") or ""):
                 new_meta["room"] = room
 
         new_meta["last_modified"] = datetime.now().isoformat()

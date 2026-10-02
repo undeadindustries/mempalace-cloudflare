@@ -204,7 +204,8 @@ def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
     top_room = top_item.get("room")
     if top_wing and top_room:
         try:
-            tunnel_res = mcp_server.tool_follow_tunnels(top_wing, top_room)
+            # Decoration of a search hit, not an agent crossing the tunnel.
+            tunnel_res = mcp_server.tool_follow_tunnels(top_wing, top_room, record=False)
             if isinstance(tunnel_res, dict) and tunnel_res.get("error"):
                 connections = []
             elif isinstance(tunnel_res, list):
@@ -601,7 +602,11 @@ LIGHT_TOOLS = {
                 "project": {"type": "string", "description": "Project routing name (optional)"},
                 "stream": {"type": "string", "description": "Logical stream (optional)"},
                 "room": {"type": "string", "description": "Sub-channel (optional)"},
-                "from_agent": {"type": "string", "description": "Writer agent identity (optional)"},
+                "from_agent": {
+                    "type": "string",
+                    "description": "Your identity (never filters; use writer)",
+                },
+                "writer": {"type": "string", "description": "List/wait: filter by event writer"},
                 "to_agent": {"type": "string", "description": "Target agent identity (optional)"},
                 "goal": {"type": "string", "description": "Task goal (optional)"},
                 "branch": {"type": "string", "description": "Git branch (optional)"},

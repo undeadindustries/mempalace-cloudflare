@@ -221,8 +221,9 @@ class CloudflarePalaceTools:
             "mempalace_search": {
                 "description": (
                     "Search past-session memories. Returns matching drawers. "
-                    "Not for the current conversation — if it happened in this session, "
-                    "answer from context instead."
+                    "Not for the current conversation — if it happened in this "
+                    "session, don't search. query is keywords only; use context "
+                    "for background."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -442,7 +443,6 @@ class CloudflarePalaceTools:
                 "description": "Check what memories have been filed recently.",
                 "input_schema": {"type": "object", "properties": {}},
                 "handler": self.tool_memories_filed_away,
-                "read_only": True,
             },
             "mempalace_kg_query": {
                 "description": "Query the knowledge graph for an entity's relationships.",

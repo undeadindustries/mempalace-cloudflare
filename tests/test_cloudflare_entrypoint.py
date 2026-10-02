@@ -189,7 +189,6 @@ def test_mcp_initialize_and_tool_list():
             "mempalace_get_drawers",
             "mempalace_list_drawers",
             "mempalace_diary_read",
-            "mempalace_memories_filed_away",
             "mempalace_kg_query",
             "mempalace_kg_timeline",
             "mempalace_kg_stats",
@@ -202,6 +201,7 @@ def test_mcp_initialize_and_tool_list():
             "mempalace_delete_drawers",
             "mempalace_delete_by_source",
             "mempalace_diary_write",
+            "mempalace_memories_filed_away",
             "mempalace_kg_add",
             "mempalace_kg_invalidate",
             "mempalace_kg_supersede",
@@ -220,6 +220,8 @@ def test_mcp_initialize_and_tool_list():
         search_tool = tools_by_name["mempalace_search"]
         assert "past-session memories" in search_tool["description"]
         assert "current conversation" in search_tool["description"]
+        assert "keywords only" in search_tool["description"]
+        assert "context for background" in search_tool["description"]
         # Sagittarius pruneToolSchemas budget is 200 runes
         assert len(search_tool["description"]) <= 200
 
