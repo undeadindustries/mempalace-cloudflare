@@ -138,9 +138,13 @@ def main():
     tools = res.get("result", {}).get("tools", [])
     assert len(tools) >= 24, f"Expected >= 24 tools, got {len(tools)}"
     hinted = [t["name"] for t in tools if t.get("readOnlyHint")]
-    assert len(hinted) == 15, f"Expected 15 readOnlyHint tools, got {len(hinted)}"
+    assert len(hinted) == 14, f"Expected 14 readOnlyHint tools, got {len(hinted)}"
+    assert "mempalace_memories_filed_away" not in hinted, (
+        "mempalace_memories_filed_away unlinks checkpoint and must not declare readOnlyHint"
+    )
     search_desc = next(t["description"] for t in tools if t["name"] == "mempalace_search")
     assert "past-session memories" in search_desc
+    assert "keywords only" in search_desc
     assert len(search_desc) <= 200
     print(f"OK ({len(tools)} tools discovered, {len(hinted)} read-only hinted)")
 
